@@ -384,7 +384,7 @@ export interface TxOptions {
   isolation?: Isolation;
   /** total attempts when the transaction conflicts (default 8) */
   retries?: number;
-  /** base back-off in ms (default 2; jittered, exponential) */
+  /** base back-off in ms (default 2; first retry immediate, then jittered exponential, capped at 50ms) */
   backoffMs?: number;
 }
 
@@ -434,8 +434,10 @@ export class Database<S extends SchemaMap = SchemaMap> extends Querier<S> {
       } catch (e) {
         await tx.rollback().catch(() => {});
         if (e instanceof ConflictError && attempt < attempts) {
-          const delay = Math.random() * Math.min(200, base * 2 ** (attempt - 1));
-          await new Promise((r) => setTimeout(r, delay));
+          // A conflict means someone else just committed, so an immediate retry usually succeeds.
+          // After that: jittered, gently growing back-off (capped so a loser is not starved).
+          if (attempt === 1) await new Promise((r) => setImmediate(r));
+          else await new Promise((r) => setTimeout(r, Math.random() * Math.min(50, base * 2 ** (attempt - 2))));
           continue;
         }
         throw e;

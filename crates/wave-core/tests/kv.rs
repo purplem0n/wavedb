@@ -574,3 +574,101 @@ fn large_dataset_scan_and_point_reads() {
         .unwrap();
     assert_eq!(first_rev.0, format!("row{:08}", n - 1).into_bytes());
 }
+
+#[test]
+fn group_commit_batches_fsyncs_under_concurrency() {
+    let d = tmp();
+    let e = Engine::open(d.path(), Options::default()).unwrap(); // Durability::Sync
+    let threads = 16;
+    let per = 25;
+    let start = std::time::Instant::now();
+    let hs: Vec<_> = (0..threads)
+        .map(|t| {
+            let e = e.clone();
+            thread::spawn(move || {
+                for i in 0..per {
+                    put(&e, &format!("gc-{t}-{i}"), "v");
+                }
+            })
+        })
+        .collect();
+    for h in hs {
+        h.join().unwrap();
+    }
+    let s = e.stats();
+    let commits = (threads * per) as u64;
+    eprintln!("group commit: {} commits, {} fsyncs, {:?}", commits, s.fsyncs, start.elapsed());
+    assert_eq!(s.commits, commits);
+    assert!(s.fsyncs < commits, "expected batching: {} fsyncs for {} commits", s.fsyncs, commits);
+}
+
+#[test]
+fn scans_over_hot_keys_with_many_versions_are_correct_in_both_directions() {
+    let d = tmp();
+    let e = open(d.path());
+    put(&e, "a", "a0");
+    put(&e, "z", "z0");
+    let mut snaps = vec![];
+    for i in 0..200 {
+        put(&e, "hot", &format!("v{i}"));
+        if i % 50 == 25 {
+            snaps.push((i, e.begin(Isolation::Snapshot)));
+        }
+        if i == 100 {
+            put(&e, "a", "a1");
+        }
+    }
+    // tombstone newest version of another hot key
+    for i in 0..40 {
+        put(&e, "gone", &format!("g{i}"));
+    }
+    let mut t = e.begin(Isolation::Snapshot);
+    t.delete(b"gone").unwrap();
+    t.commit().unwrap();
+
+    let cur = |rev: bool| -> Vec<(String, String)> {
+        let mut t = e.begin(Isolation::Snapshot);
+        t.scan(Bound::Unbounded, Bound::Unbounded, rev)
+            .unwrap()
+            .map(|r| {
+                let (k, v) = r.unwrap();
+                (String::from_utf8(k).unwrap(), String::from_utf8(v).unwrap())
+            })
+            .collect()
+    };
+    let want = vec![
+        ("a".to_string(), "a1".to_string()),
+        ("hot".to_string(), "v199".to_string()),
+        ("z".to_string(), "z0".to_string()),
+    ];
+    assert_eq!(cur(false), want);
+    let mut rev = want.clone();
+    rev.reverse();
+    assert_eq!(cur(true), rev);
+
+    for (i, mut s) in snaps {
+        let a_expect = if i >= 100 { "a1" } else { "a0" };
+        for reverse in [false, true] {
+            let mut rows: Vec<(String, String)> = s
+                .scan(Bound::Unbounded, Bound::Unbounded, reverse)
+                .unwrap()
+                .map(|r| {
+                    let (k, v) = r.unwrap();
+                    (String::from_utf8(k).unwrap(), String::from_utf8(v).unwrap())
+                })
+                .collect();
+            if reverse {
+                rows.reverse();
+            }
+            assert_eq!(
+                rows,
+                vec![
+                    ("a".to_string(), a_expect.to_string()),
+                    ("hot".to_string(), format!("v{i}")),
+                    ("z".to_string(), "z0".to_string())
+                ],
+                "snapshot at version {i}, reverse={reverse}"
+            );
+        }
+    }
+}

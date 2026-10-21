@@ -9,7 +9,29 @@ use std::path::Path;
 use std::sync::Arc;
 
 /// Maximum automatic retries for single-statement (autocommit) conflicts.
-pub const AUTOCOMMIT_RETRIES: usize = 24;
+pub const AUTOCOMMIT_RETRIES: usize = 200;
+
+/// Tiny per-thread xorshift for back-off jitter (no external RNG needed).
+fn jitter(bound: u64) -> u64 {
+    use std::cell::Cell;
+    thread_local! {
+        static S: Cell<u64> = Cell::new({
+            let t = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0x9E37_79B9_7F4A_7C15);
+            (t ^ (&t as *const u64 as u64)).max(1)
+        });
+    }
+    S.with(|s| {
+        let mut x = s.get();
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        s.set(x);
+        x % bound.max(1)
+    })
+}
 
 #[derive(Clone)]
 pub struct Db {
@@ -46,8 +68,14 @@ impl Db {
             match res {
                 Err(Error::Conflict(_)) if attempt < AUTOCOMMIT_RETRIES => {
                     attempt += 1;
-                    let us = (1u64 << attempt.min(10)) * 20;
-                    std::thread::sleep(std::time::Duration::from_micros(us + (attempt as u64 * 37) % 97));
+                    // Single statements are short, so the first retries just yield; after that a
+                    // randomized, capped (2 ms) exponential back-off de-synchronizes contenders.
+                    if attempt <= 3 {
+                        std::thread::yield_now();
+                    } else {
+                        let window = (20u64 << (attempt - 3).min(7)).min(2_000);
+                        std::thread::sleep(std::time::Duration::from_micros(jitter(window) + 1));
+                    }
                 }
                 other => return other,
             }

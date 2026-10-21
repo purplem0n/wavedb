@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::iter::Peekable;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
 const TS_LEN: usize = 8;
@@ -123,6 +123,8 @@ pub struct Engine {
     active: Mutex<BTreeMap<u64, usize>>,
     sync: Mutex<SyncState>,
     sync_cv: Condvar,
+    /// committers that entered `commit` but have not finished appending yet (Sync mode only)
+    entering: AtomicUsize,
     counters: Counters,
     aux: Mutex<HashMap<u32, Arc<AtomicI64>>>,
 }
@@ -173,6 +175,7 @@ impl Engine {
             active: Mutex::new(BTreeMap::new()),
             sync: Mutex::new(SyncState::default()),
             sync_cv: Condvar::new(),
+            entering: AtomicUsize::new(0),
             counters: Counters::default(),
             aux: Mutex::new(HashMap::new()),
         }))
@@ -299,12 +302,16 @@ impl Engine {
             Bound::Excluded(k) => Bound::Excluded(encode_group(k)),
         };
         SnapIter {
-            inner: self.data.range((lo_b, hi_b)),
+            inner: self.data.range((lo_b.clone(), hi_b.clone())),
+            data: self.data.clone(),
+            lo_b,
+            hi_b,
             snap,
             reverse,
             last_group: None,
             cur_group: None,
             candidate: None,
+            run: 0,
         }
     }
 
@@ -317,8 +324,16 @@ impl Engine {
                 continue;
             }
             st.syncing = true;
-            let target = self.commit_seq.load(Ordering::Acquire);
             drop(st);
+            // Commit window: fjall's journal lock is held while it fsyncs, so committers that
+            // arrive mid-fsync queue up behind it. Give committers that have entered `commit`
+            // but not yet appended a moment to do so, so one fsync covers the whole group.
+            let mut waited = 0u32;
+            while waited < 40 && self.entering.load(Ordering::Acquire) > 0 {
+                std::thread::sleep(std::time::Duration::from_micros(25));
+                waited += 1;
+            }
+            let target = self.commit_seq.load(Ordering::Acquire);
             let res = self.db.persist(PersistMode::SyncData);
             st = self.sync.lock();
             st.syncing = false;
@@ -489,12 +504,20 @@ pub fn prefix_range(prefix: &[u8]) -> (KeyBound, KeyBound) {
 /// Iterates the newest visible, non-deleted version of each user key.
 pub struct SnapIter {
     inner: fjall::Iter,
+    data: Keyspace,
+    lo_b: Bound<Vec<u8>>,
+    hi_b: Bound<Vec<u8>>,
     snap: u64,
     reverse: bool,
     last_group: Option<Vec<u8>>,
     cur_group: Option<Vec<u8>>,
     candidate: Option<(Vec<u8>, Vec<u8>)>,
+    /// consecutive entries of the same key group seen (hot rows pile up dead versions)
+    run: u32,
 }
+
+/// After this many consecutive versions of one key, re-seek instead of walking the rest.
+const RESEEK_AFTER: u32 = 8;
 
 type KvItem = Result<(Vec<u8>, Vec<u8>)>;
 
@@ -524,8 +547,35 @@ impl Iterator for SnapIter {
                 }
                 let (group, ts) = split_version(&k);
                 if self.last_group.as_deref() == Some(group) || ts > self.snap {
+                    self.run += 1;
+                    if self.run >= RESEEK_AFTER {
+                        // many dead versions of one key: jump past the whole group
+                        let mut end = group.to_vec();
+                        end.extend_from_slice(&[0xFF; TS_LEN]);
+                        self.inner = self.data.range((Bound::Excluded(end), self.hi_b.clone()));
+                        self.run = 0;
+                        if self.last_group.as_deref() != Some(group) {
+                            // newest visible version not seen yet (all seen were too new): look it up
+                            let key = unescape_group(group);
+                            let lo = versioned_key(&key, self.snap);
+                            let mut hi = group.to_vec();
+                            hi.extend_from_slice(&[0xFF; TS_LEN]);
+                            if let Some(g) = self.data.range((Bound::Included(lo), Bound::Included(hi))).next() {
+                                match g.into_inner() {
+                                    Ok((_, v)) => {
+                                        self.last_group = Some(group.to_vec());
+                                        if let Some(item) = Self::emit(group, &v) {
+                                            return Some(Ok(item));
+                                        }
+                                    }
+                                    Err(e) => return Some(Err(e.into())),
+                                }
+                            }
+                        }
+                    }
                     continue;
                 }
+                self.run = 0;
                 self.last_group = Some(group.to_vec());
                 if let Some(item) = Self::emit(group, &v) {
                     return Some(Ok(item));
@@ -556,9 +606,31 @@ impl Iterator for SnapIter {
                                 out = Self::emit(&c.0, &c.1);
                             }
                             self.cur_group = Some(group.to_vec());
+                            self.run = 0;
                         }
+                        self.run += 1;
                         if ts <= self.snap {
                             self.candidate = Some((group.to_vec(), v.to_vec()));
+                        }
+                        if self.run >= RESEEK_AFTER {
+                            // hot key with many versions (walking oldest -> newest): look the visible
+                            // one up directly and continue before this group
+                            let key = unescape_group(group);
+                            let lo = versioned_key(&key, self.snap);
+                            let mut hi = group.to_vec();
+                            hi.extend_from_slice(&[0xFF; TS_LEN]);
+                            let found = self.data.range((Bound::Included(lo), Bound::Included(hi))).next();
+                            self.candidate = match found {
+                                Some(g) => match g.into_inner() {
+                                    Ok((_, v)) => Some((group.to_vec(), v.to_vec())),
+                                    Err(e) => return Some(Err(e.into())),
+                                },
+                                None => None,
+                            };
+                            let mut start = group.to_vec();
+                            start.extend_from_slice(&[0x00; TS_LEN]);
+                            self.inner = self.data.range((self.lo_b.clone(), Bound::Excluded(start)));
+                            self.run = 0;
                         }
                         if let Some(item) = out {
                             return Some(Ok(item));
@@ -767,6 +839,8 @@ impl Txn {
             });
         }
         let eng = self.engine.clone();
+        let sync_mode = eng.opts.durability == Durability::Sync;
+        let entering = EnterGuard::new(sync_mode.then_some(&eng.entering));
         let (commit_ts, seq) = {
             let mut cs = eng.commit.lock();
             // --- validate ---
@@ -850,8 +924,9 @@ impl Txn {
             let seq = eng.commit_seq.fetch_add(1, Ordering::AcqRel) + 1;
             (ts, seq)
         };
+        drop(entering);
         eng.counters.commits.fetch_add(1, Ordering::Relaxed);
-        if eng.opts.durability == Durability::Sync {
+        if sync_mode {
             eng.wait_durable(seq)?;
         }
         Ok(CommitInfo {
@@ -874,6 +949,25 @@ fn range_is_empty(lo: &KeyBound, hi: &KeyBound) -> bool {
         | (Bound::Excluded(a), Bound::Included(b))
         | (Bound::Excluded(a), Bound::Excluded(b)) => a >= b,
         _ => false,
+    }
+}
+
+struct EnterGuard<'a>(Option<&'a AtomicUsize>);
+
+impl<'a> EnterGuard<'a> {
+    fn new(c: Option<&'a AtomicUsize>) -> Self {
+        if let Some(c) = c {
+            c.fetch_add(1, Ordering::AcqRel);
+        }
+        EnterGuard(c)
+    }
+}
+
+impl Drop for EnterGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(c) = self.0 {
+            c.fetch_sub(1, Ordering::AcqRel);
+        }
     }
 }
 

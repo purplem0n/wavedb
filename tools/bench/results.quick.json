@@ -1,0 +1,281 @@
+{
+  "machine": {
+    "cpu": "Apple M4",
+    "cores": 10,
+    "platform": "darwin-arm64",
+    "memoryGiB": 16,
+    "runtime": "Bun 1.4.1",
+    "date": "2026-10-21",
+    "quick": true
+  },
+  "rows": [
+    {
+      "scenario": "write: disjoint keys (1 row/commit)",
+      "workers": 1,
+      "durability": "async",
+      "ops": 6000,
+      "seconds": 0.122,
+      "opsPerSec": 49176,
+      "p50ms": 0.017,
+      "p99ms": 0.06
+    },
+    {
+      "scenario": "write: disjoint keys (1 row/commit)",
+      "workers": 4,
+      "durability": "async",
+      "ops": 6000,
+      "seconds": 0.054,
+      "opsPerSec": 111139,
+      "p50ms": 0.03,
+      "p99ms": 0.114
+    },
+    {
+      "scenario": "write: disjoint keys (1 row/commit)",
+      "workers": 8,
+      "durability": "async",
+      "ops": 6000,
+      "seconds": 0.053,
+      "opsPerSec": 113472,
+      "p50ms": 0.063,
+      "p99ms": 0.243
+    },
+    {
+      "scenario": "write: disjoint keys (1 row/commit)",
+      "workers": 16,
+      "durability": "async",
+      "ops": 6000,
+      "seconds": 0.053,
+      "opsPerSec": 114142,
+      "p50ms": 0.113,
+      "p99ms": 0.565
+    },
+    {
+      "scenario": "write: disjoint keys (1 row/commit)",
+      "workers": 32,
+      "durability": "async",
+      "ops": 6000,
+      "seconds": 0.051,
+      "opsPerSec": 118654,
+      "p50ms": 0.202,
+      "p99ms": 1.152
+    },
+    {
+      "scenario": "write: disjoint keys (1 row/commit)",
+      "workers": 1,
+      "durability": "sync",
+      "ops": 300,
+      "seconds": 1.199,
+      "opsPerSec": 250,
+      "p50ms": 4,
+      "p99ms": 5.002,
+      "note": "1.0 commits/fsync"
+    },
+    {
+      "scenario": "write: disjoint keys (1 row/commit)",
+      "workers": 8,
+      "durability": "sync",
+      "ops": 300,
+      "seconds": 0.162,
+      "opsPerSec": 1853,
+      "p50ms": 4.002,
+      "p99ms": 6.902,
+      "note": "7.5 commits/fsync"
+    },
+    {
+      "scenario": "write: disjoint keys (1 row/commit)",
+      "workers": 32,
+      "durability": "sync",
+      "ops": 300,
+      "seconds": 0.125,
+      "opsPerSec": 2408,
+      "p50ms": 11.877,
+      "p99ms": 37.044,
+      "note": "9.7 commits/fsync"
+    },
+    {
+      "scenario": "write: disjoint keys (1 row/commit)",
+      "workers": 64,
+      "durability": "sync",
+      "ops": 300,
+      "seconds": 0.134,
+      "opsPerSec": 2240,
+      "p50ms": 21.104,
+      "p99ms": 78.693,
+      "note": "9.4 commits/fsync"
+    },
+    {
+      "scenario": "write: batched insert (1000 rows/tx)",
+      "workers": 1,
+      "durability": "async",
+      "ops": 20000,
+      "seconds": 0.098,
+      "opsPerSec": 204417,
+      "p50ms": 0,
+      "p99ms": 0,
+      "note": "rows/sec"
+    },
+    {
+      "scenario": "read: point lookup by PK",
+      "workers": 1,
+      "durability": "async",
+      "ops": 10000,
+      "seconds": 0.177,
+      "opsPerSec": 56440,
+      "p50ms": 0.017,
+      "p99ms": 0.026
+    },
+    {
+      "scenario": "read: point lookup by PK",
+      "workers": 8,
+      "durability": "async",
+      "ops": 10000,
+      "seconds": 0.052,
+      "opsPerSec": 193874,
+      "p50ms": 0.041,
+      "p99ms": 0.085
+    },
+    {
+      "scenario": "read: point lookup by PK",
+      "workers": 32,
+      "durability": "async",
+      "ops": 10000,
+      "seconds": 0.033,
+      "opsPerSec": 302167,
+      "p50ms": 0.086,
+      "p99ms": 0.303
+    },
+    {
+      "scenario": "read: secondary-index lookup (~100 rows)",
+      "workers": 8,
+      "durability": "async",
+      "ops": 500,
+      "seconds": 0.006,
+      "opsPerSec": 78899,
+      "p50ms": 0.091,
+      "p99ms": 0.2
+    },
+    {
+      "scenario": "read: range scan (100 rows by PK)",
+      "workers": 8,
+      "durability": "async",
+      "ops": 1000,
+      "seconds": 0.03,
+      "opsPerSec": 33218,
+      "p50ms": 0.224,
+      "p99ms": 0.481
+    },
+    {
+      "scenario": "mixed: 90% read / 10% write",
+      "workers": 8,
+      "durability": "async",
+      "ops": 10000,
+      "seconds": 0.05,
+      "opsPerSec": 198335,
+      "p50ms": 0.039,
+      "p99ms": 0.108
+    },
+    {
+      "scenario": "mixed: 90% read / 10% write",
+      "workers": 32,
+      "durability": "async",
+      "ops": 10000,
+      "seconds": 0.039,
+      "opsPerSec": 258828,
+      "p50ms": 0.104,
+      "p99ms": 0.4
+    },
+    {
+      "scenario": "mixed: 50% read / 50% write",
+      "workers": 8,
+      "durability": "async",
+      "ops": 10000,
+      "seconds": 0.099,
+      "opsPerSec": 100915,
+      "p50ms": 0.047,
+      "p99ms": 0.603
+    },
+    {
+      "scenario": "mixed: 50% read / 50% write",
+      "workers": 32,
+      "durability": "async",
+      "ops": 10000,
+      "seconds": 0.052,
+      "opsPerSec": 191742,
+      "p50ms": 0.128,
+      "p99ms": 0.642
+    },
+    {
+      "scenario": "write: update disjoint existing rows",
+      "workers": 8,
+      "durability": "async",
+      "ops": 5000,
+      "seconds": 0.037,
+      "opsPerSec": 133561,
+      "p50ms": 0.049,
+      "p99ms": 0.199
+    },
+    {
+      "scenario": "contended: read-modify-write on 1 row",
+      "workers": 1,
+      "durability": "async",
+      "ops": 500,
+      "seconds": 0.034,
+      "opsPerSec": 14844,
+      "p50ms": 0.065,
+      "p99ms": 0.11,
+      "note": "0 conflicts retried"
+    },
+    {
+      "scenario": "contended: read-modify-write on 1 row",
+      "workers": 4,
+      "durability": "async",
+      "ops": 500,
+      "seconds": 0.055,
+      "opsPerSec": 9079,
+      "p50ms": 0.089,
+      "p99ms": 0.731,
+      "note": "26 conflicts retried"
+    },
+    {
+      "scenario": "contended: read-modify-write on 1 row",
+      "workers": 16,
+      "durability": "async",
+      "ops": 500,
+      "seconds": 0.128,
+      "opsPerSec": 3919,
+      "p50ms": 0.118,
+      "p99ms": 89.806,
+      "note": "140 conflicts retried"
+    },
+    {
+      "scenario": "contended: atomic UPDATE n = n + 1 (1 row)",
+      "workers": 1,
+      "durability": "async",
+      "ops": 2000,
+      "seconds": 0.343,
+      "opsPerSec": 5832,
+      "p50ms": 0.17,
+      "p99ms": 0.248
+    },
+    {
+      "scenario": "contended: atomic UPDATE n = n + 1 (1 row)",
+      "workers": 4,
+      "durability": "async",
+      "ops": 2000,
+      "seconds": 0.631,
+      "opsPerSec": 3170,
+      "p50ms": 0.307,
+      "p99ms": 30.614
+    },
+    {
+      "scenario": "contended: atomic UPDATE n = n + 1 (1 row)",
+      "workers": 16,
+      "durability": "async",
+      "ops": 2000,
+      "seconds": 0.96,
+      "opsPerSec": 2083,
+      "p50ms": 1.37,
+      "p99ms": 155.105
+    }
+  ]
+}

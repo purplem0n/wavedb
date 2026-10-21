@@ -151,6 +151,21 @@ describe("large database (100k rows)", () => {
   }, 120_000);
 });
 
+describe("hot rows", () => {
+  test("20k updates of one row stay fast (dead versions are skipped, not scanned)", async () => {
+    const db = await wave(join(tmpDir(), "hot.wave"), { schema: { customers }, durability: "async" });
+    await db.insert(customers).values({ id: 1, name: "n0", region: "r" });
+    const t0 = performance.now();
+    for (let i = 1; i <= 20_000; i++) await db.update(customers).set({ name: `n${i}` }).where(eq(customers.id, 1)).execute();
+    const secs = (performance.now() - t0) / 1000;
+    console.log(`  20k same-row updates: ${secs.toFixed(2)}s`);
+    expect((await db.query.customers.findFirst({ where: { id: 1 } }))!.name).toBe("n20000");
+    expect(await db.query.customers.count()).toBe(1);
+    expect(secs).toBeLessThan(8);
+    await db.close();
+  }, 60_000);
+});
+
 describe("small database", () => {
   test("empty-table queries and single-row edge cases", async () => {
     const db = await wave(join(tmpDir(), "small.wave"), { schema: { customers } });

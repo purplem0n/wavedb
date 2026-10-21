@@ -1,6 +1,6 @@
 // Builds the N-API addon and copies it to packages/wavedb/native/wave.<platform>-<arch>.node
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, existsSync } from "node:fs";
+import { copyFileSync, mkdirSync, existsSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -19,5 +19,8 @@ if (!existsSync(src)) throw new Error(`missing build artifact ${src}`);
 const outDir = join(root, "packages", "wavedb", "native");
 mkdirSync(outDir, { recursive: true });
 const dest = join(outDir, `wave.${process.platform}-${process.arch}.node`);
+// Replace (don't overwrite in place): macOS caches code signatures per inode and SIGKILLs a modified binary.
+rmSync(dest, { force: true });
 copyFileSync(src, dest);
+if (process.platform === "darwin") spawnSync("codesign", ["--force", "--sign", "-", dest], { stdio: "ignore" });
 console.log(`native addon -> ${dest}`);
