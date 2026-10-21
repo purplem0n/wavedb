@@ -1,0 +1,20 @@
+{
+  "name": "hono-marketplace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun run src/index.ts",
+    "seed": "bun run scripts/seed.ts",
+    "seed:force": "bun run scripts/seed.ts --force",
+    "stress": "bun run scripts/stress.ts",
+    "stress:quick": "STRESS_DURATION_SEC=30 SEED_PROFILE=quick bun run scripts/stress.ts"
+  },
+  "dependencies": {
+    "hono": "^4.13.13",
+    "wavedb": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
