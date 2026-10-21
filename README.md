@@ -2,6 +2,12 @@
 
 **A concurrent-write embedded relational database for TypeScript** — one Rust core, usable from Node and Bun.
 
+```bash
+npm install wavedb    # or: bun add wavedb / pnpm add wavedb
+```
+
+Node ≥ 20 or Bun ≥ 1.1. Prebuilt native addons ship per platform; from this repo, run `bun run build:native` (Rust). [Deployment guide](docs/deployment.md).
+
 - **Many writers, no global write lock.** MVCC snapshots + optimistic concurrency control (OCC): transactions that touch
   different keys never block or conflict; conflicting ones are detected at commit and retried automatically by `db.tx()`.
 - **Real transactions.** Snapshot isolation by default, `serializable` on request (read-key and range/phantom validation).
@@ -68,16 +74,6 @@ WaveDB is **early software** (0.1). The engine is well tested, but the on-disk f
 - **Single process owns the files.** fjall holds a directory lock, so a second process cannot open the same `data.wave`; use `wave serve` + `connect()`. Optional leader lease + `connect({ urls })` failover — see [deployment](docs/deployment.md).
 - **SQL subset:** no triggers; correlated subqueries not supported. Identifiers are case-sensitive. Prefer `db.tx()` over ad-hoc SQL sessions for app code.
 - **Replication / sharding / encryption at rest** are out of scope for 0.1.
-
-## Install
-
-From npm (prebuilt native addon for your OS/CPU via optional `wavedb-<platform>-<arch>` packages):
-
-```bash
-npm install wavedb    # or: bun add wavedb / pnpm add wavedb
-```
-
-Node ≥ 20 or Bun ≥ 1.1. If no prebuild matches your platform, build from source: `bun run build:native` (requires Rust stable). See [Production & deployment](docs/deployment.md) when you ship an app.
 
 ## Quick start (monorepo / from source)
 
