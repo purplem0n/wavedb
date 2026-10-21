@@ -8,7 +8,7 @@
     "build:native": "node scripts/build-native.mjs",
     "build:native:debug": "node scripts/build-native.mjs --debug",
     "build": "bun run build:native && bun run --filter wavedb build && bun run --filter wave-studio build",
-    "test": "bun run test:rust && bun run test:ts",
+    "test": "bun run test:rust && bun run test:ts && bun run test:node",
     "test:rust": "cargo test --workspace",
     "test:ts": "bun run build:native && bun test packages/wavedb/test packages/wave-cli/test",
     "test:node": "node scripts/node-smoke.mjs",

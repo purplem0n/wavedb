@@ -69,3 +69,5 @@ export {
 } from "./db.ts";
 export type { SchemaOp, TableDefJson } from "./migrate.ts";
 export { SelectBuilder, InsertBuilder, UpdateBuilder, DeleteBuilder, type ExecResult, type RawResult, type Executor } from "./query.ts";
+export { serve, type ServeOptions, type WaveServer } from "./server.ts";
+export { connect, type ConnectOptions } from "./remote.ts";
