@@ -30,7 +30,7 @@
 use crate::error::{Error, Result};
 use fjall::{Database, Keyspace, KeyspaceCreateOptions, PersistMode};
 use parking_lot::{Condvar, Mutex};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::iter::Peekable;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
@@ -240,6 +240,8 @@ impl Engine {
             writes: BTreeMap::new(),
             read_keys: Vec::new(),
             read_ranges: Vec::new(),
+            commutative_keys: HashSet::new(),
+            pre_commit: None,
             done: false,
         }
     }
@@ -264,7 +266,7 @@ impl Engine {
     }
 
     /// Point read of the newest version of `key` visible at `snap`.
-    fn read_at(&self, key: &[u8], snap: u64) -> Result<Option<Vec<u8>>> {
+    pub(crate) fn read_at(&self, key: &[u8], snap: u64) -> Result<Option<Vec<u8>>> {
         let lo = versioned_key(key, snap);
         let mut hi = encode_group(key);
         hi.extend_from_slice(&[0xFF; TS_LEN]);
@@ -722,6 +724,9 @@ pub struct Txn {
     writes: BTreeMap<Vec<u8>, Option<Vec<u8>>>,
     read_keys: Vec<Vec<u8>>,
     read_ranges: Vec<(KeyBound, KeyBound)>,
+    /// Row keys merged under the commit lock (skip write-write validation).
+    commutative_keys: HashSet<Vec<u8>>,
+    pre_commit: Option<Box<dyn FnOnce(&mut Txn) -> Result<()> + Send>>,
     done: bool,
 }
 
@@ -735,7 +740,16 @@ impl Txn {
     }
 
     pub fn is_read_only(&self) -> bool {
-        self.writes.is_empty()
+        self.writes.is_empty() && self.pre_commit.is_none()
+    }
+
+    /// Runs inside the commit mutex immediately before validation (e.g. commutative row merges).
+    pub fn on_commit(&mut self, f: impl FnOnce(&mut Txn) -> Result<()> + Send + 'static) {
+        self.pre_commit = Some(Box::new(f));
+    }
+
+    pub fn mark_commutative_key(&mut self, key: Vec<u8>) {
+        self.commutative_keys.insert(key);
     }
 
     pub fn write_count(&self) -> usize {
@@ -831,20 +845,26 @@ impl Txn {
     }
 
     fn commit_inner(&mut self) -> Result<CommitInfo> {
-        if self.writes.is_empty() {
-            self.engine.counters.commits.fetch_add(1, Ordering::Relaxed);
-            return Ok(CommitInfo {
-                commit_ts: self.start_ts,
-                keys_written: 0,
-            });
-        }
         let eng = self.engine.clone();
         let sync_mode = eng.opts.durability == Durability::Sync;
         let entering = EnterGuard::new(sync_mode.then_some(&eng.entering));
         let (commit_ts, seq) = {
             let mut cs = eng.commit.lock();
+            if let Some(f) = self.pre_commit.take() {
+                f(self)?;
+            }
+            if self.writes.is_empty() {
+                eng.counters.commits.fetch_add(1, Ordering::Relaxed);
+                return Ok(CommitInfo {
+                    commit_ts: self.start_ts,
+                    keys_written: 0,
+                });
+            }
             // --- validate ---
             for k in self.writes.keys() {
+                if self.commutative_keys.contains(k) {
+                    continue;
+                }
                 if let Some(&ts) = cs.last_write.get(k) {
                     if ts > self.start_ts {
                         eng.counters.conflicts.fetch_add(1, Ordering::Relaxed);

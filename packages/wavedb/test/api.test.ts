@@ -337,6 +337,26 @@ describe("transactions", () => {
     await db.close();
   });
 
+  test("inc() updates merge without OCC conflicts under contention", async () => {
+    const counter = table("counter", { id: int().primaryKey(), n: int().notNull() });
+    const { db } = await openTmp({ schema: { counter } });
+    await db.insert(counter).values({ id: 1, n: 0 });
+    const N = 16;
+    const M = 15;
+    await Promise.all(
+      Array.from({ length: N }, () =>
+        Promise.all(
+          Array.from({ length: M }, () =>
+            db.update(counter).set({ n: inc(1) }).where(eq(counter.id, 1)).execute(),
+          ),
+        ),
+      ),
+    );
+    expect((await db.select().from(counter))[0]!.n).toBe(N * M);
+    expect((await db.stats()).conflicts).toBe(0);
+    await db.close();
+  });
+
   test("serializable detects write skew; snapshot allows it", async () => {
     const acct = table("acct", { id: int().primaryKey(), bal: int().notNull() });
     const { db } = await openTmp({ schema: { acct } });

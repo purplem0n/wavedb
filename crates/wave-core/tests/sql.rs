@@ -458,6 +458,7 @@ fn concurrent_counter_updates_serialize_via_retry() {
         h.join().unwrap();
     }
     assert_eq!(q(&db, "SELECT n FROM c"), vec![vec![i(600)]]);
+    assert_eq!(db.engine().stats().conflicts, 0, "commutative integer updates should not OCC-conflict");
 }
 
 /// Randomised differential test: SQL table vs an in-memory model, with a secondary index.

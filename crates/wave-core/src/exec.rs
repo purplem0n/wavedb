@@ -17,6 +17,8 @@ use std::sync::Arc;
 pub struct DbTxn {
     txn: Txn,
     tables: HashMap<String, Arc<TableDef>>,
+    /// Pending integer column deltas merged at commit (conflict-free under lock).
+    commutative: HashMap<Vec<u8>, (Arc<TableDef>, Vec<Value>, HashMap<usize, i64>)>,
 }
 
 struct Source {
@@ -548,6 +550,58 @@ fn group_key(vals: &[Value]) -> Vec<u8> {
     k
 }
 
+fn int_increment_delta(e: &BExpr, col: usize) -> Option<i64> {
+    match e {
+        BExpr::Bin(BinOp::Add, l, r) => {
+            if matches!(l.as_ref(), BExpr::Col(p) if *p == col) {
+                if let BExpr::Lit(Value::Int(d)) = r.as_ref() {
+                    return Some(*d);
+                }
+            }
+            if matches!(r.as_ref(), BExpr::Col(p) if *p == col) {
+                if let BExpr::Lit(Value::Int(d)) = l.as_ref() {
+                    return Some(*d);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn apply_row_update(txn: &mut Txn, t: &TableDef, old: &[Value], new: &[Value]) -> Result<()> {
+    let old_pk = t.pk_enc(old);
+    let new_pk = t.pk_enc(new);
+    debug_assert_eq!(old_pk, new_pk);
+    txn.put(&t.row_key(&new_pk), &t.encode_value(new))?;
+    for idx in &t.indexes {
+        let ok = t.index_key(idx, old, &old_pk);
+        let nk = t.index_key(idx, new, &new_pk);
+        if ok != nk {
+            txn.delete(&ok)?;
+            txn.put(&nk, &new_pk)?;
+        }
+        if idx.unique {
+            let og = if t.index_has_null(idx, old) { None } else { Some(t.guard_key(idx, old)) };
+            let ng = if t.index_has_null(idx, new) { None } else { Some(t.guard_key(idx, new)) };
+            if og != ng {
+                if let Some(g) = &ng {
+                    if txn.get(g)?.is_some() {
+                        return Err(DbTxn::unique_violation(t, &idx.name, &idx.columns));
+                    }
+                }
+                if let Some(g) = &og {
+                    txn.delete(g)?;
+                }
+                if let Some(g) = &ng {
+                    txn.put(g, &new_pk)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // executor
 // ---------------------------------------------------------------------------
@@ -557,6 +611,7 @@ impl DbTxn {
         DbTxn {
             txn,
             tables: HashMap::new(),
+            commutative: HashMap::new(),
         }
     }
 
@@ -564,7 +619,29 @@ impl DbTxn {
         &mut self.txn
     }
 
-    pub fn commit(self) -> Result<CommitInfo> {
+    pub fn commit(mut self) -> Result<CommitInfo> {
+        if !self.commutative.is_empty() {
+            let pending = std::mem::take(&mut self.commutative);
+            self.txn.on_commit(move |txn| {
+                for (_, (t, _old, deltas)) in pending {
+                    let pk = t.pk_enc(&_old);
+                    let rk = t.row_key(&pk);
+                    let vis = txn.engine().visible_ts();
+                    let cur = match txn.engine().read_at(&rk, vis)? {
+                        Some(b) => t.decode_value(&b)?,
+                        None => return Err(Error::NotFound(format!("row missing for {}", t.name))),
+                    };
+                    let mut new = cur.clone();
+                    for (p, d) in deltas {
+                        let n = new[p].as_i64().unwrap_or(0).saturating_add(d);
+                        new[p] = Value::Int(n);
+                    }
+                    apply_row_update(txn, &t, &cur, &new)?;
+                    txn.mark_commutative_key(rk);
+                }
+                Ok(())
+            });
+        }
         self.txn.commit()
     }
 
@@ -1128,33 +1205,7 @@ impl DbTxn {
             }
             return self.write_new(t, new);
         }
-        self.txn.put(&t.row_key(&new_pk), &t.encode_value(new))?;
-        for idx in &t.indexes {
-            let ok = t.index_key(idx, old, &old_pk);
-            let nk = t.index_key(idx, new, &new_pk);
-            if ok != nk {
-                self.txn.delete(&ok)?;
-                self.txn.put(&nk, &new_pk)?;
-            }
-            if idx.unique {
-                let og = if t.index_has_null(idx, old) { None } else { Some(t.guard_key(idx, old)) };
-                let ng = if t.index_has_null(idx, new) { None } else { Some(t.guard_key(idx, new)) };
-                if og != ng {
-                    if let Some(g) = &ng {
-                        if self.txn.get(g)?.is_some() {
-                            return Err(Self::unique_violation(t, &idx.name, &idx.columns));
-                        }
-                    }
-                    if let Some(g) = &og {
-                        self.txn.delete(g)?;
-                    }
-                    if let Some(g) = &ng {
-                        self.txn.put(g, &new_pk)?;
-                    }
-                }
-            }
-        }
-        Ok(())
+        apply_row_update(&mut self.txn, t, old, new)
     }
 
     // ----- INSERT ---------------------------------------------------------------
@@ -1299,14 +1350,33 @@ impl DbTxn {
         }
         let rows = self.matching_rows(&t, st.where_.as_ref())?;
         let mut updated = vec![];
+        let commutative_ok =
+            !sets.is_empty() && sets.iter().all(|(p, e)| int_increment_delta(e, *p).is_some());
         for old in rows {
-            let mut new = old.clone();
-            for (p, e) in &sets {
-                new[*p] = eval(e, &old, &[])?;
+            if commutative_ok {
+                let pk = t.pk_enc(&old);
+                let rk = t.row_key(&pk);
+                let mut new = old.clone();
+                for (p, e) in &sets {
+                    let d = int_increment_delta(e, *p).unwrap();
+                    let entry = self
+                        .commutative
+                        .entry(rk.clone())
+                        .or_insert_with(|| (t.clone(), old.clone(), HashMap::new()));
+                    *entry.2.entry(*p).or_insert(0) += d;
+                    new[*p] = Value::Int(old[*p].as_i64().unwrap_or(0) + entry.2[p]);
+                }
+                self.check_row(&t, &mut new)?;
+                updated.push(new);
+            } else {
+                let mut new = old.clone();
+                for (p, e) in &sets {
+                    new[*p] = eval(e, &old, &[])?;
+                }
+                self.check_row(&t, &mut new)?;
+                self.update_row(&t, &old, &new)?;
+                updated.push(new);
             }
-            self.check_row(&t, &mut new)?;
-            self.update_row(&t, &old, &new)?;
-            updated.push(new);
         }
         let (columns, rows) = self.returning(&t, &st.returning, &updated)?;
         Ok(QueryResult {
