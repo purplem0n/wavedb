@@ -1,0 +1,23 @@
+{
+  "name": "wavedb-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "WaveDB — a concurrent-write embedded relational database for TypeScript (Node + Bun)",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build:native": "node scripts/build-native.mjs",
+    "build:native:debug": "node scripts/build-native.mjs --debug",
+    "build": "bun run build:native && bun run --filter wavedb build && bun run --filter wave-studio build",
+    "test": "bun run test:rust && bun run test:ts",
+    "test:rust": "cargo test --workspace",
+    "test:ts": "bun run build:native && bun test packages/wavedb/test packages/wave-cli/test",
+    "test:node": "node scripts/node-smoke.mjs",
+    "bench": "bun run build:native && bun tools/bench/bench.ts",
+    "studio": "bun packages/wave-cli/src/main.ts studio"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "latest",
+    "typescript": "latest"
+  }
+}
