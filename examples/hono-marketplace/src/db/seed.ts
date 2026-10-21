@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { wave, type Database } from "wavedb";
+import { wave, type Database } from "@purplemon/wavedb";
 import { type AppSchema, schema } from "./schema.ts";
 import { resolveSeedProfile, type SeedProfile } from "./seed-profile.ts";
 

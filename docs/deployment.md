@@ -5,10 +5,10 @@ WaveDB is an **embedded native database** with a **persistent on-disk directory*
 ## Install
 
 ```bash
-npm install wavedb   # Node ≥ 20 or Bun ≥ 1.1
+npm install @purplemon/wavedb   # Node ≥ 20 or Bun ≥ 1.1
 ```
 
-Prebuilt native addons ship via optional `wavedb-<platform>-<arch>` packages. From source (monorepo): `bun run build:native` (Rust stable required).
+Prebuilt native addons ship via optional `@purplemon/wavedb-<platform>-<arch>` packages. From source (monorepo): `bun run build:native` (Rust stable required).
 
 ## Patterns
 

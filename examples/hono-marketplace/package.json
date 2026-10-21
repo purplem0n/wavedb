@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "hono": "^4.13.13",
-    "wavedb": "workspace:*"
+    "@purplemon/wavedb": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "latest"

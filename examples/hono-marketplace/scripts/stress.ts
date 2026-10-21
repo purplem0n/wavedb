@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { writeFileSync } from "node:fs";
 import { createApp } from "../src/app.ts";
 import { openMarketplaceDb } from "../src/db/seed.ts";
-import { ConflictError } from "wavedb";
+import { ConflictError } from "@purplemon/wavedb";
 import type { MarketplaceDb } from "../src/db/context.ts";
 
 const durationSec = Number(process.env.STRESS_DURATION_SEC ?? 180);

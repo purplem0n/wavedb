@@ -1,16 +1,31 @@
 {
-  "name": "wavedb",
+  "name": "@purplemon/wavedb",
   "version": "0.1.0",
   "description": "WaveDB — concurrent-write embedded relational database with a TypeScript-first API (Node + Bun)",
   "type": "module",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "bun": "./src/index.ts", "default": "./dist/index.js" },
-    "./server": { "types": "./dist/server.d.ts", "bun": "./src/server.ts", "default": "./dist/server.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "bun": "./src/server.ts",
+      "default": "./dist/server.js"
+    }
   },
-  "files": ["dist", "native", "README.md"],
+  "files": [
+    "dist",
+    "native",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "build:native": "napi build --release --cargo-cwd ../../crates/wave-napi -o native --output-dir native",
@@ -29,11 +44,13 @@
     ]
   },
   "optionalDependencies": {
-    "wavedb-darwin-arm64": "workspace:*",
-    "wavedb-darwin-x64": "workspace:*",
-    "wavedb-linux-arm64": "workspace:*",
-    "wavedb-linux-x64": "workspace:*",
-    "wavedb-win32-x64": "workspace:*"
+    "@purplemon/wavedb-darwin-arm64": "workspace:*",
+    "@purplemon/wavedb-darwin-x64": "workspace:*",
+    "@purplemon/wavedb-linux-arm64": "workspace:*",
+    "@purplemon/wavedb-linux-x64": "workspace:*",
+    "@purplemon/wavedb-win32-x64": "workspace:*"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

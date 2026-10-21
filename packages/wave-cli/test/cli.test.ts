@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { connect, int, table, text, wave } from "wavedb";
+import { connect, int, table, text, wave } from "@purplemon/wavedb";
 import { formatTable, parseArgs, run } from "../src/cli.ts";
 import { cleanup, tmpDir } from "../../wavedb/test/helpers.ts";
 

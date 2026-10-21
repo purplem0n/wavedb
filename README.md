@@ -3,7 +3,7 @@
 **A concurrent-write embedded relational database for TypeScript** — one Rust core, usable from Node and Bun.
 
 ```bash
-npm install wavedb    # or: bun add wavedb / pnpm add wavedb
+npm install @purplemon/wavedb    # or: bun add @purplemon/wavedb / pnpm add @purplemon/wavedb
 ```
 
 Node ≥ 20 or Bun ≥ 1.1. Prebuilt native addons ship per platform; from this repo, run `bun run build:native` (Rust). [Deployment guide](docs/deployment.md).
@@ -19,7 +19,7 @@ Node ≥ 20 or Bun ≥ 1.1. Prebuilt native addons ship per platform; from this 
 - **Multi-process.** `wave serve` / `serve(db)` exposes the same API over HTTP; `connect(url)` is a drop-in `Database`.
 
 ```ts
-import { wave, table, int, text, timestamp, eq, desc, sql } from "wavedb";
+import { wave, table, int, text, timestamp, eq, desc, sql } from "@purplemon/wavedb";
 
 const users = table("users", {
   id: int().autoIncrement(),
@@ -105,7 +105,7 @@ wave export [path] --out dump.json   /   wave import [path] --in dump.json
 ### Multi-process
 
 ```ts
-import { wave, serve, connect } from "wavedb";
+import { wave, serve, connect } from "@purplemon/wavedb";
 const db = await wave("./data.wave", { schema });
 const server = await serve(db, { port: 4401, token: "secret" });   // host process
 

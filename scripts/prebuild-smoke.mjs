@@ -14,7 +14,7 @@ let mod;
 if (existsSync(bundled)) {
   mod = require(bundled);
 } else {
-  mod = require(`wavedb-${process.platform}-${process.arch}`);
+  mod = require(`@purplemon/wavedb-${process.platform}-${process.arch}`);
 }
 assert.equal(typeof mod.version(), "string");
 

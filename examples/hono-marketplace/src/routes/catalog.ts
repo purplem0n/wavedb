@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, asc, desc, eq, gte, inArray, inc, like, lte } from "wavedb";
+import { and, asc, desc, eq, gte, inArray, inc, like, lte } from "@purplemon/wavedb";
 import type { AppEnv } from "../db/context.ts";
 import { customers, orders, orderItems, productReviews, products, regions, sellers } from "../db/schema.ts";
 

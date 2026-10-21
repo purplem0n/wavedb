@@ -49,9 +49,9 @@ export function loadNative(): NativeModule {
       return cached;
     }
   }
-  // optional platform packages: wavedb-darwin-arm64, ...
+  // optional platform packages: @purplemon/wavedb-darwin-arm64, ...
   try {
-    cached = require(`wavedb-${process.platform}-${process.arch}`) as NativeModule;
+    cached = require(`@purplemon/wavedb-${process.platform}-${process.arch}`) as NativeModule;
     return cached;
   } catch {}
   throw new Error(

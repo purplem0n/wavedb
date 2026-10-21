@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
-import { serve, wave, type TableDefJson, type AnyTable, type Database, type SchemaMap, type WaveServer } from "wavedb";
+import { serve, wave, type TableDefJson, type AnyTable, type Database, type SchemaMap, type WaveServer } from "@purplemon/wavedb";
 
 export interface IO {
   out(s: string): void;
@@ -261,7 +261,7 @@ export async function run(argv: string[], io: IO): Promise<RunResult> {
         token: typeof flags.token === "string" ? flags.token : undefined,
         cors: !!flags.cors,
         dataPath: resolve(path),
-        leader: flags.leader !== false,
+        leader: !("leader" in flags) || flags.leader === true,
         standby: !!flags.standby,
       });
       io.out(`WaveDB serving ${resolve(path)} at ${server.url}\n`);

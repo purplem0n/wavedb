@@ -20,7 +20,8 @@
     "demo:marketplace": "bun run build:native && bun run --cwd examples/hono-marketplace dev",
     "studio": "bun packages/wave-cli/src/main.ts studio",
     "test:studio": "cd packages/wave-studio && ../../node_modules/.bin/tsc --noEmit && bunx vite build",
-    "typecheck": "tsc -p packages/wavedb/tsconfig.json --noEmit && tsc -p packages/wave-cli/tsconfig.json --noEmit && tsc -p packages/wave-studio/tsconfig.json --noEmit"
+    "typecheck": "tsc -p packages/wavedb/tsconfig.json --noEmit && tsc -p packages/wave-cli/tsconfig.json --noEmit && tsc -p packages/wave-studio/tsconfig.json --noEmit",
+    "publish:npm": "node scripts/copy-studio.mjs && node scripts/publish-npm.mjs"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2.18.4",

@@ -1,4 +1,4 @@
-import { index, int, json, real, table, text, timestamp, uniqueIndex } from "wavedb";
+import { index, int, json, real, table, text, timestamp, uniqueIndex } from "@purplemon/wavedb";
 
 export const regions = table("regions", {
   id: int().primaryKey(),
