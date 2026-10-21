@@ -221,20 +221,32 @@ fn const_i64(e: &a::Expr, cx: &mut Cx) -> Result<i64> {
 }
 
 fn conv_query(q: &a::Query, cx: &mut Cx) -> Result<SelectStmt> {
-    if q.with.is_some() {
-        return unsupported("WITH (CTEs)");
-    }
     let select = match &*q.body {
         a::SetExpr::Select(s) => s,
         _ => return unsupported("set operations / VALUES queries"),
     };
     let mut st = SelectStmt::default();
+    if let Some(with) = &q.with {
+        if with.recursive {
+            return unsupported("recursive CTEs (WITH RECURSIVE)");
+        }
+        st.with = with
+            .cte_tables
+            .iter()
+            .map(|c| {
+                Ok(CteEntry {
+                    name: c.alias.name.value.clone(),
+                    query: conv_query(&c.query, cx)?,
+                })
+            })
+            .collect::<Result<_>>()?;
+    }
     st.distinct = matches!(select.distinct, Some(a::Distinct::Distinct));
     if select.from.len() > 1 {
         return unsupported("comma joins (use JOIN ... ON)");
     }
     if let Some(twj) = select.from.first() {
-        st.from = Some(conv_table_ref(&twj.relation)?);
+        st.from = Some(conv_table_ref(&twj.relation, cx)?);
         for j in &twj.joins {
             let (kind, constraint) = match &j.join_operator {
                 a::JoinOperator::Join(c) | a::JoinOperator::Inner(c) => (JoinKind::Inner, c),
@@ -249,7 +261,7 @@ fn conv_query(q: &a::Query, cx: &mut Cx) -> Result<SelectStmt> {
             };
             st.joins.push(Join {
                 kind,
-                table: conv_table_ref(&j.relation)?,
+                table: conv_table_ref(&j.relation, cx)?,
                 on,
             });
         }
@@ -297,13 +309,29 @@ fn conv_query(q: &a::Query, cx: &mut Cx) -> Result<SelectStmt> {
     Ok(st)
 }
 
-fn conv_table_ref(t: &a::TableFactor) -> Result<TableRef> {
+fn conv_table_ref(t: &a::TableFactor, cx: &mut Cx) -> Result<TableRef> {
     match t {
         a::TableFactor::Table { name, alias, .. } => Ok(TableRef {
             name: ident_name(name)?,
             alias: alias.as_ref().map(|a| a.name.value.clone()),
+            subquery: None,
         }),
-        _ => unsupported("subqueries / table functions in FROM"),
+        a::TableFactor::Derived {
+            lateral,
+            subquery,
+            alias,
+            ..
+        } => {
+            if *lateral {
+                return unsupported("LATERAL subqueries");
+            }
+            Ok(TableRef {
+                name: String::new(),
+                alias: alias.as_ref().map(|a| a.name.value.clone()),
+                subquery: Some(Box::new(conv_query(subquery, cx)?)),
+            })
+        }
+        _ => unsupported("table functions in FROM"),
     }
 }
 
@@ -588,6 +616,19 @@ fn conv_expr(e: &a::Expr, cx: &mut Cx) -> Result<Expr> {
             e: Box::new(conv_expr(expr, cx)?),
             list: list.iter().map(|x| conv_expr(x, cx)).collect::<Result<_>>()?,
             negated: *negated,
+        },
+        a::Expr::InSubquery {
+            expr,
+            subquery,
+            negated,
+        } => Expr::InSubquery {
+            e: Box::new(conv_expr(expr, cx)?),
+            query: Box::new(conv_query(subquery, cx)?),
+            negated: *negated,
+        },
+        a::Expr::Subquery(q) => Expr::Subquery {
+            query: Box::new(conv_query(q, cx)?),
+            scalar: true,
         },
         a::Expr::Between {
             expr,

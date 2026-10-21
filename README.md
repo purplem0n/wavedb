@@ -66,7 +66,7 @@ WaveDB is **early software** (0.1). The engine is well tested, but the on-disk f
 ### Deferred / known gaps
 
 - **Single process owns the files.** fjall holds a directory lock, so a second process cannot open the same `data.wave`; use `wave serve` + `connect()`. There is no automatic host election / failover yet.
-- **SQL subset:** no CTEs, subqueries, set operations (`UNION`), window functions, views, triggers, foreign-key *enforcement* (`.references()` only drives the relational `with` loader), or `BEGIN/COMMIT` statements (use `db.tx()`). Identifiers are case-sensitive.
+- **SQL subset:** no set operations (`UNION`), window functions, views, triggers, foreign-key *enforcement* (`.references()` only drives the relational `with` loader), or `BEGIN/COMMIT` statements (use `db.tx()`). Identifiers are case-sensitive.
 - **Replication / sharding / encryption at rest** are out of scope for 0.1.
 
 ## Install

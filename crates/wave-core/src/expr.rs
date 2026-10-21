@@ -1,9 +1,11 @@
 //! Expression IR (JSON-serializable), binder and evaluator.
 
 use crate::error::{Error, Result};
+use crate::stmt::SelectStmt;
 use crate::value::{now_ms, sql_cmp, uuid4, uuid7, ColumnType, Value};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum BinOp {
@@ -101,6 +103,17 @@ pub enum Expr {
         #[serde(default, rename = "else")]
         else_: Option<Box<Expr>>,
     },
+    Subquery {
+        query: Box<SelectStmt>,
+        #[serde(default)]
+        scalar: bool,
+    },
+    InSubquery {
+        e: Box<Expr>,
+        query: Box<SelectStmt>,
+        #[serde(default)]
+        negated: bool,
+    },
 }
 
 impl Expr {
@@ -141,6 +154,10 @@ pub enum BExpr {
     Case(Option<Box<BExpr>>, Vec<(BExpr, BExpr)>, Option<Box<BExpr>>),
     /// Reference to the n-th aggregate result of the current group.
     Agg(usize),
+    /// Materialized uncorrelated scalar subquery (single column, first row).
+    SubqueryScalar(Arc<SubqueryResult>),
+    /// Materialized uncorrelated `IN (SELECT …)` (compare to column 0).
+    InSubquery(Box<BExpr>, Arc<SubqueryResult>, bool),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -190,6 +207,15 @@ pub struct BindCx<'a> {
     pub allow_aggs: bool,
     /// Select-list aliases usable in ORDER BY / HAVING.
     pub aliases: Vec<(String, Expr)>,
+    /// Materialized subquery results indexed by id.
+    pub subqueries: &'a [SubqueryResult],
+    pub next_subquery: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct SubqueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Value>>,
 }
 
 impl<'a> BindCx<'a> {
@@ -199,7 +225,18 @@ impl<'a> BindCx<'a> {
             aggs: vec![],
             allow_aggs: false,
             aliases: vec![],
+            subqueries: &[],
+            next_subquery: 0,
         }
+    }
+
+    pub fn take_subquery_id(&mut self) -> Result<usize> {
+        let id = self.next_subquery;
+        if id >= self.subqueries.len() {
+            return Err(Error::Sql("internal error: subquery not materialized".into()));
+        }
+        self.next_subquery += 1;
+        Ok(id)
     }
 }
 
@@ -214,6 +251,63 @@ pub fn agg_func(name: &str) -> Option<AggFunc> {
     }
 }
 
+fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
+    f(e);
+    match e {
+        Expr::Bin { l, r, .. } => {
+            walk_expr(l, f);
+            walk_expr(r, f);
+        }
+        Expr::Not { e } | Expr::Neg { e } | Expr::IsNull { e, .. } => walk_expr(e, f),
+        Expr::In { e, list, .. } => {
+            walk_expr(e, f);
+            for x in list {
+                walk_expr(x, f);
+            }
+        }
+        Expr::Between { e, lo, hi, .. } => {
+            walk_expr(e, f);
+            walk_expr(lo, f);
+            walk_expr(hi, f);
+        }
+        Expr::Like { e, pattern, .. } => {
+            walk_expr(e, f);
+            walk_expr(pattern, f);
+        }
+        Expr::Func { args, .. } => {
+            for a in args {
+                walk_expr(a, f);
+            }
+        }
+        Expr::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            if let Some(o) = operand {
+                walk_expr(o, f);
+            }
+            for (a, b) in whens {
+                walk_expr(a, f);
+                walk_expr(b, f);
+            }
+            if let Some(o) = else_ {
+                walk_expr(o, f);
+            }
+        }
+        Expr::Subquery { .. } | Expr::InSubquery { .. } | Expr::Col { .. } | Expr::Lit { .. } => {}
+    }
+}
+
+/// Visit subquery bodies in the same order `bind()` assigns materialization ids.
+pub fn walk_subqueries_in_expr(e: &Expr, f: &mut impl FnMut(&SelectStmt)) {
+    walk_expr(e, &mut |node| match node {
+        Expr::Subquery { query, .. } => f(query),
+        Expr::InSubquery { query, .. } => f(query),
+        _ => {}
+    });
+}
+
 pub fn contains_agg(e: &Expr) -> bool {
     match e {
         Expr::Func { name, args, .. } => {
@@ -223,8 +317,10 @@ pub fn contains_agg(e: &Expr) -> bool {
         Expr::Bin { l, r, .. } => contains_agg(l) || contains_agg(r),
         Expr::Not { e } | Expr::Neg { e } | Expr::IsNull { e, .. } => contains_agg(e),
         Expr::In { e, list, .. } => contains_agg(e) || list.iter().any(contains_agg),
+        Expr::InSubquery { e, .. } => contains_agg(e),
         Expr::Between { e, lo, hi, .. } => contains_agg(e) || contains_agg(lo) || contains_agg(hi),
         Expr::Like { e, pattern, .. } => contains_agg(e) || contains_agg(pattern),
+        Expr::Subquery { query, .. } => stmt_contains_agg(query),
         Expr::Case {
             operand,
             whens,
@@ -236,6 +332,89 @@ pub fn contains_agg(e: &Expr) -> bool {
         }
         _ => false,
     }
+}
+
+/// True when the statement references a table alias defined outside its own `FROM`.
+pub fn references_outer_aliases(st: &SelectStmt, outer: &std::collections::HashSet<String>) -> bool {
+    fn expr_hit(e: &Expr, outer: &std::collections::HashSet<String>) -> bool {
+        match e {
+            Expr::Col { table: Some(t), .. } if outer.contains(t) => true,
+            Expr::Bin { l, r, .. } => expr_hit(l, outer) || expr_hit(r, outer),
+            Expr::Not { e } | Expr::Neg { e } | Expr::IsNull { e, .. } => expr_hit(e, outer),
+            Expr::In { e, list, .. } => expr_hit(e, outer) || list.iter().any(|x| expr_hit(x, outer)),
+            Expr::InSubquery { e, query, .. } => expr_hit(e, outer) || references_outer_aliases(query, outer),
+            Expr::Between { e, lo, hi, .. } => {
+                expr_hit(e, outer) || expr_hit(lo, outer) || expr_hit(hi, outer)
+            }
+            Expr::Like { e, pattern, .. } => expr_hit(e, outer) || expr_hit(pattern, outer),
+            Expr::Func { args, .. } => args.iter().any(|a| expr_hit(a, outer)),
+            Expr::Case {
+                operand,
+                whens,
+                else_,
+            } => {
+                operand.as_deref().map_or(false, |o| expr_hit(o, outer))
+                    || whens.iter().any(|(a, b)| expr_hit(a, outer) || expr_hit(b, outer))
+                    || else_.as_deref().map_or(false, |o| expr_hit(o, outer))
+            }
+            Expr::Subquery { query, .. } => references_outer_aliases(query, outer),
+            _ => false,
+        }
+    }
+    st.where_.as_ref().map_or(false, |e| expr_hit(e, outer))
+        || st.group_by.iter().any(|g| expr_hit(g, outer))
+        || st.having.as_ref().map_or(false, |e| expr_hit(e, outer))
+        || st.order_by.iter().any(|o| expr_hit(&o.expr, outer))
+        || st.columns.iter().any(|c| match c {
+            crate::stmt::SelectItem::Expr { expr, .. } => expr_hit(expr, outer),
+            _ => false,
+        })
+        || st.joins.iter().any(|j| expr_hit(&j.on, outer))
+        || st.from.as_ref().map_or(false, |f| {
+            f.subquery
+                .as_deref()
+                .map_or(false, |q| references_outer_aliases(q, outer))
+        })
+        || st.with.iter().any(|c| references_outer_aliases(&c.query, outer))
+}
+
+pub fn collect_subqueries(st: &SelectStmt) -> Vec<SelectStmt> {
+    let mut out = vec![];
+    let mut take = |q: &SelectStmt| out.push(q.clone());
+    for j in &st.joins {
+        walk_subqueries_in_expr(&j.on, &mut take);
+    }
+    if let Some(w) = &st.where_ {
+        walk_subqueries_in_expr(w, &mut take);
+    }
+    for g in &st.group_by {
+        walk_subqueries_in_expr(g, &mut take);
+    }
+    for c in &st.columns {
+        if let crate::stmt::SelectItem::Expr { expr, .. } = c {
+            walk_subqueries_in_expr(expr, &mut take);
+        }
+    }
+    if let Some(h) = &st.having {
+        walk_subqueries_in_expr(h, &mut take);
+    }
+    for o in &st.order_by {
+        walk_subqueries_in_expr(&o.expr, &mut take);
+    }
+    out
+}
+
+pub fn stmt_contains_agg(st: &SelectStmt) -> bool {
+    use crate::stmt::SelectItem;
+    st.where_.as_ref().map_or(false, contains_agg)
+        || st.group_by.iter().any(|g| contains_agg(g))
+        || st.having.as_ref().map_or(false, contains_agg)
+        || st.order_by.iter().any(|o| contains_agg(&o.expr))
+        || st.columns.iter().any(|c| match c {
+            SelectItem::Expr { expr, .. } => contains_agg(expr),
+            _ => false,
+        })
+        || st.joins.iter().any(|j| contains_agg(&j.on))
 }
 
 pub fn bind(e: &Expr, cx: &mut BindCx) -> Result<BExpr> {
@@ -341,6 +520,18 @@ pub fn bind(e: &Expr, cx: &mut BindCx) -> Result<BExpr> {
                 None => None,
             },
         ),
+        Expr::Subquery { .. } => {
+            let id = cx.take_subquery_id()?;
+            BExpr::SubqueryScalar(Arc::new(cx.subqueries[id].clone()))
+        }
+        Expr::InSubquery { e, negated, .. } => {
+            let id = cx.take_subquery_id()?;
+            BExpr::InSubquery(
+                Box::new(bind(e, cx)?),
+                Arc::new(cx.subqueries[id].clone()),
+                *negated,
+            )
+        }
     })
 }
 
@@ -362,6 +553,8 @@ pub fn refs_col_ge(e: &BExpr, from: usize) -> bool {
                 || w.iter().any(|(a, b)| refs_col_ge(a, from) || refs_col_ge(b, from))
                 || e.as_deref().map_or(false, |x| refs_col_ge(x, from))
         }
+        BExpr::SubqueryScalar(_) => false,
+        BExpr::InSubquery(e, _, _) => refs_col_ge(e, from),
     }
 }
 
@@ -497,6 +690,36 @@ pub fn eval(e: &BExpr, row: &[Value], aggs: &[Value]) -> Result<Value> {
                 .map(|a| eval(a, row, aggs))
                 .collect::<Result<_>>()?;
             call_func(name, vals)?
+        }
+        BExpr::SubqueryScalar(sq) => {
+            if sq.columns.len() != 1 {
+                return Err(Error::Sql("scalar subquery must return one column".into()));
+            }
+            match sq.rows.len() {
+                0 => Value::Null,
+                1 => sq.rows[0][0].clone(),
+                _ => return Err(Error::Sql("scalar subquery returned more than one row".into())),
+            }
+        }
+        BExpr::InSubquery(e, sq, neg) => {
+            let v = eval(e, row, aggs)?;
+            if v.is_null() {
+                return Ok(Value::Null);
+            }
+            let mut saw_null = false;
+            for r in &sq.rows {
+                let iv = r.first().cloned().unwrap_or(Value::Null);
+                match sql_cmp(&v, &iv) {
+                    Some(Ordering::Equal) => return Ok(Value::Bool(!*neg)),
+                    None if iv.is_null() => saw_null = true,
+                    _ => {}
+                }
+            }
+            if saw_null {
+                Value::Null
+            } else {
+                Value::Bool(*neg)
+            }
         }
     })
 }

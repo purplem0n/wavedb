@@ -21,10 +21,70 @@ pub struct DbTxn {
     commutative: HashMap<Vec<u8>, (Arc<TableDef>, Vec<Value>, HashMap<usize, i64>)>,
 }
 
+enum SourceKind {
+    Table(Arc<TableDef>),
+    Memory {
+        columns: Vec<String>,
+        rows: Arc<Vec<Vec<Value>>>,
+        label: String,
+    },
+}
+
 struct Source {
     alias: String,
-    table: Arc<TableDef>,
+    kind: SourceKind,
     off: usize,
+}
+
+impl Source {
+    fn col_count(&self) -> usize {
+        match &self.kind {
+            SourceKind::Table(def) => def.columns.len(),
+            SourceKind::Memory { columns, .. } => columns.len(),
+        }
+    }
+
+    fn describe(&self, plan: &AccessPlan) -> String {
+        match &self.kind {
+            SourceKind::Table(def) => describe_plan(def, plan, &self.alias),
+            SourceKind::Memory { label, .. } => format!("FULL SCAN {label} AS {}", self.alias),
+        }
+    }
+}
+
+enum RowsIter {
+    Table(RowIter),
+    Memory {
+        rows: Arc<Vec<Vec<Value>>>,
+        i: usize,
+    },
+}
+
+impl RowsIter {
+    fn next(&mut self, txn: &mut Txn) -> Result<Option<Vec<Value>>> {
+        match self {
+            RowsIter::Table(it) => it.next(txn),
+            RowsIter::Memory { rows, i } => {
+                if *i >= rows.len() {
+                    Ok(None)
+                } else {
+                    let r = rows[*i].clone();
+                    *i += 1;
+                    Ok(Some(r))
+                }
+            }
+        }
+    }
+}
+
+fn source_iter(s: &Source, plan: &AccessPlan, env: &[Value]) -> Result<RowsIter> {
+    Ok(match &s.kind {
+        SourceKind::Table(def) => RowsIter::Table(row_iter(def, plan, env)?),
+        SourceKind::Memory { rows, .. } => RowsIter::Memory {
+            rows: rows.clone(),
+            i: 0,
+        },
+    })
 }
 
 #[derive(Default, Clone)]
@@ -35,7 +95,7 @@ struct Cons {
     hi: Option<(BExpr, bool)>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct AccessPlan {
     /// position into `table.indexes`, or `None` for the primary key
     index: Option<usize>,
@@ -713,34 +773,125 @@ impl DbTxn {
     // ----- SELECT -----------------------------------------------------------
 
     fn exec_select(&mut self, st: &SelectStmt, explain: bool) -> Result<QueryResult> {
+        let empty_ctes = HashMap::new();
+        let empty_scope = HashSet::new();
+        self.exec_select_impl(st, explain, &empty_ctes, &empty_scope)
+    }
+
+    fn exec_select_impl(
+        &mut self,
+        st: &SelectStmt,
+        explain: bool,
+        parent_ctes: &HashMap<String, Arc<SubqueryResult>>,
+        outer_scope: &HashSet<String>,
+    ) -> Result<QueryResult> {
+        let mut cte_map = parent_ctes.clone();
+        for cte in &st.with {
+            if references_outer_aliases(&cte.query, outer_scope) {
+                return Err(Error::Sql("correlated subqueries are not supported".into()));
+            }
+            let qr = self.exec_select_impl(&cte.query, false, &cte_map, outer_scope)?;
+            cte_map.insert(
+                cte.name.clone(),
+                Arc::new(SubqueryResult {
+                    columns: qr.columns,
+                    rows: qr.rows,
+                }),
+            );
+        }
+
+        let mut scope: HashSet<String> = outer_scope.clone();
+        for c in &st.with {
+            scope.insert(c.name.clone());
+        }
+
         // sources
         let mut sources: Vec<Source> = vec![];
         let mut layout = Layout::default();
-        if let Some(from) = &st.from {
-            let t = self.table(&from.name)?;
-            let alias = from.alias.clone().unwrap_or_else(|| from.name.clone());
-            for c in &t.columns {
-                layout.cols.push((alias.clone(), c.name.clone()));
-            }
-            sources.push(Source {
-                alias,
-                table: t,
-                off: 0,
-            });
-        } else if !st.joins.is_empty() {
-            return Err(Error::Sql("JOIN requires a FROM table".into()));
-        }
-        for j in &st.joins {
-            let t = self.table(&j.table.name)?;
-            let alias = j.table.alias.clone().unwrap_or_else(|| j.table.name.clone());
+
+        let mut push_source = |this: &mut Self,
+                               tr: &TableRef,
+                               cte_map: &HashMap<String, Arc<SubqueryResult>>,
+                               scope: &HashSet<String>|
+         -> Result<()> {
+            let alias = tr
+                .alias
+                .clone()
+                .unwrap_or_else(|| {
+                    if tr.name.is_empty() {
+                        "subquery".into()
+                    } else {
+                        tr.name.clone()
+                    }
+                });
             if sources.iter().any(|s| s.alias == alias) {
                 return Err(Error::Sql(format!("duplicate table alias \"{alias}\"; use an alias")));
             }
             let off = layout.cols.len();
-            for c in &t.columns {
-                layout.cols.push((alias.clone(), c.name.clone()));
-            }
-            sources.push(Source { alias, table: t, off });
+            let kind = if let Some(sq) = &tr.subquery {
+                if references_outer_aliases(sq, scope) {
+                    return Err(Error::Sql("correlated subqueries are not supported".into()));
+                }
+                let qr = this.exec_select_impl(sq.as_ref(), false, cte_map, scope)?;
+                let cols = qr.columns.clone();
+                for c in &cols {
+                    layout.cols.push((alias.clone(), c.clone()));
+                }
+                SourceKind::Memory {
+                    columns: cols,
+                    rows: Arc::new(qr.rows),
+                    label: "SUBQUERY".into(),
+                }
+            } else if let Some(mat) = cte_map.get(&tr.name) {
+                for c in &mat.columns {
+                    layout.cols.push((alias.clone(), c.clone()));
+                }
+                SourceKind::Memory {
+                    columns: mat.columns.clone(),
+                    rows: Arc::new(mat.rows.clone()),
+                    label: tr.name.clone(),
+                }
+            } else {
+                let t = this.table(&tr.name)?;
+                for c in &t.columns {
+                    layout.cols.push((alias.clone(), c.name.clone()));
+                }
+                SourceKind::Table(t)
+            };
+            sources.push(Source { alias: alias.clone(), kind, off });
+            Ok(())
+        };
+
+        if let Some(from) = &st.from {
+            push_source(self, from, &cte_map, &scope)?;
+            scope.insert(
+                from.alias
+                    .clone()
+                    .unwrap_or_else(|| {
+                        if from.name.is_empty() {
+                            "subquery".into()
+                        } else {
+                            from.name.clone()
+                        }
+                    }),
+            );
+        } else if !st.joins.is_empty() {
+            return Err(Error::Sql("JOIN requires a FROM table".into()));
+        }
+        for j in &st.joins {
+            push_source(self, &j.table, &cte_map, &scope)?;
+            let alias = j
+                .table
+                .alias
+                .clone()
+                .unwrap_or_else(|| {
+                    if j.table.name.is_empty() {
+                        "subquery".into()
+                    } else {
+                        j.table.name.clone()
+                    }
+                });
+            scope.insert(alias);
         }
 
         // select list
@@ -754,12 +905,18 @@ impl DbTxn {
                     for s in &sources {
                         if table.as_ref().map_or(true, |t| t == &s.alias) {
                             any = true;
-                            for c in &s.table.columns {
+                            let names: Vec<String> = match &s.kind {
+                                SourceKind::Table(def) => {
+                                    def.columns.iter().map(|c| c.name.clone()).collect()
+                                }
+                                SourceKind::Memory { columns, .. } => columns.clone(),
+                            };
+                            for c in names {
                                 items.push((
-                                    c.name.clone(),
+                                    c.clone(),
                                     Expr::Col {
                                         table: Some(s.alias.clone()),
-                                        name: c.name.clone(),
+                                        name: c,
                                     },
                                 ));
                             }
@@ -781,8 +938,22 @@ impl DbTxn {
             || st.having.is_some()
             || st.order_by.iter().any(|o| contains_agg(&o.expr));
 
+        let subq_specs = collect_subqueries(st);
+        let mut subq_results: Vec<SubqueryResult> = vec![];
+        for sq in &subq_specs {
+            if references_outer_aliases(sq, &scope) {
+                return Err(Error::Sql("correlated subqueries are not supported".into()));
+            }
+            let qr = self.exec_select_impl(sq, false, &cte_map, &scope)?;
+            subq_results.push(SubqueryResult {
+                columns: qr.columns,
+                rows: qr.rows,
+            });
+        }
+
         // bind
         let mut cx = BindCx::new(&layout);
+        cx.subqueries = &subq_results;
         let mut on_b: Vec<BExpr> = vec![];
         for j in &st.joins {
             on_b.push(bind(&j.on, &mut cx)?);
@@ -820,7 +991,7 @@ impl DbTxn {
         }
         let mut path_order: Vec<(usize, bool)> = vec![];
         if !agg_mode && !st.distinct && !order_b.is_empty() && !sources.is_empty() {
-            let n0 = sources[0].table.columns.len();
+            let n0 = sources[0].col_count();
             for (e, d) in &order_b {
                 match e {
                     BExpr::Col(i) if *i < n0 => path_order.push((*i, *d)),
@@ -833,20 +1004,28 @@ impl DbTxn {
         }
         let mut plans: Vec<AccessPlan> = vec![];
         if let Some(s0) = sources.first() {
-            plans.push(plan_access(&s0.table, 0, &conj, &path_order, st.limit.is_some()));
+            let p = match &s0.kind {
+                SourceKind::Table(def) => plan_access(def, 0, &conj, &path_order, st.limit.is_some()),
+                SourceKind::Memory { .. } => AccessPlan::default(),
+            };
+            plans.push(p);
         }
         for (ji, _) in st.joins.iter().enumerate() {
             let s = &sources[ji + 1];
             let mut jc = vec![];
             split_conjuncts(&on_b[ji], &mut jc);
-            plans.push(plan_access(&s.table, s.off, &jc, &[], false));
+            let p = match &s.kind {
+                SourceKind::Table(def) => plan_access(def, s.off, &jc, &[], false),
+                SourceKind::Memory { .. } => AccessPlan::default(),
+            };
+            plans.push(p);
         }
 
         if explain {
             let rows: Vec<Vec<Value>> = sources
                 .iter()
                 .zip(plans.iter())
-                .map(|(s, p)| vec![Value::Text(describe_plan(&s.table, p, &s.alias))])
+                .map(|(s, p)| vec![Value::Text(s.describe(p))])
                 .collect();
             return Ok(QueryResult {
                 columns: vec!["plan".into()],
@@ -917,15 +1096,15 @@ impl DbTxn {
         if sources.is_empty() {
             handle(vec![], &mut out)?;
         } else {
-            let mut base = row_iter(&sources[0].table, &plans[0], &[])?;
+            let mut base = source_iter(&sources[0], &plans[0], &[])?;
             'outer: while let Some(brow) = base.next(&mut self.txn)? {
                 let mut rows = vec![brow];
                 for (ji, j) in st.joins.iter().enumerate() {
                     let s = &sources[ji + 1];
-                    let width = s.table.columns.len();
+                    let width = s.col_count();
                     let mut next_rows = vec![];
                     for left in &rows {
-                        let mut it = row_iter(&s.table, &plans[ji + 1], left)?;
+                        let mut it = source_iter(s, &plans[ji + 1], left)?;
                         let mut matched = false;
                         while let Some(r) = it.next(&mut self.txn)? {
                             let mut combined = left.clone();

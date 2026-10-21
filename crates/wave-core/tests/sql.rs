@@ -634,6 +634,107 @@ fn large_dataset_queries() {
 }
 
 #[test]
+fn subqueries_in_where_from_and_scalar() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE dept (id INT PRIMARY KEY, name TEXT)");
+    q(&db, "CREATE TABLE emp (id INT PRIMARY KEY, dept_id INT, name TEXT)");
+    q(
+        &db,
+        "INSERT INTO dept VALUES (1,'eng'),(2,'sales'),(3,'ops'),(4,'empty')",
+    );
+    q(
+        &db,
+        "INSERT INTO emp VALUES (1,1,'a'),(2,1,'b'),(3,2,'c'),(4,3,'d'),(5,99,'orphan')",
+    );
+    // IN (SELECT …)
+    assert_eq!(
+        q(
+            &db,
+            "SELECT name FROM emp WHERE dept_id IN (SELECT id FROM dept WHERE name IN ('eng','sales')) ORDER BY id"
+        ),
+        vec![vec![t("a")], vec![t("b")], vec![t("c")]]
+    );
+    // NOT IN empty subquery -> true for all non-null lhs
+    assert_eq!(
+        q(
+            &db,
+            "SELECT count(*) FROM emp WHERE dept_id NOT IN (SELECT id FROM dept WHERE name = 'empty')"
+        ),
+        vec![vec![i(5)]]
+    );
+    // scalar subquery
+    assert_eq!(
+        q(&db, "SELECT (SELECT count(*) FROM emp WHERE dept_id = 1)"),
+        vec![vec![i(2)]]
+    );
+    // FROM subquery
+    assert_eq!(
+        q(
+            &db,
+            "SELECT n FROM (SELECT name AS n FROM emp WHERE dept_id = 2) AS x ORDER BY n"
+        ),
+        vec![vec![t("c")]]
+    );
+}
+
+#[test]
+fn with_cte_non_recursive() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE t (id INT PRIMARY KEY, v INT)");
+    q(&db, "INSERT INTO t VALUES (1,10),(2,20),(3,30)");
+    assert_eq!(
+        q(
+            &db,
+            "WITH big AS (SELECT * FROM t WHERE v >= 20) SELECT sum(v) FROM big"
+        ),
+        vec![vec![i(50)]]
+    );
+    assert_eq!(
+        q(
+            &db,
+            "WITH a AS (SELECT id FROM t WHERE v < 30), b AS (SELECT count(*) AS n FROM a) SELECT n FROM b"
+        ),
+        vec![vec![i(2)]]
+    );
+}
+
+#[test]
+fn subquery_null_and_empty_edges() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE p (id INT PRIMARY KEY, tag TEXT)");
+    q(&db, "INSERT INTO p VALUES (1,'x'),(2,NULL)");
+    // lhs NULL -> IN subquery is unknown
+    assert_eq!(
+        q(&db, "SELECT id FROM p WHERE tag IN (SELECT 'x')"),
+        vec![vec![i(1)]]
+    );
+    assert_eq!(q(&db, "SELECT count(*) FROM p WHERE tag IN (SELECT 'y')"), vec![vec![i(0)]]);
+    let rows = q(&db, "SELECT (tag = 'nope') IS NULL FROM p WHERE id = 2");
+    assert_eq!(rows, vec![vec![Value::Bool(true)]]);
+    // empty scalar subquery -> NULL
+    assert_eq!(
+        q(&db, "SELECT (SELECT id FROM p WHERE id > 100) IS NULL"),
+        vec![vec![Value::Bool(true)]]
+    );
+}
+
+#[test]
+fn correlated_subquery_is_rejected() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE a (id INT PRIMARY KEY, g INT)");
+    q(&db, "CREATE TABLE b (id INT PRIMARY KEY, g INT)");
+    q(&db, "INSERT INTO a VALUES (1,1),(2,2)");
+    q(&db, "INSERT INTO b VALUES (1,1),(2,9)");
+    let e = db
+        .execute_sql(
+            "SELECT id FROM a WHERE g IN (SELECT g FROM b WHERE b.id = a.id)",
+            &[],
+        )
+        .unwrap_err();
+    assert!(e.to_string().contains("correlated"), "{e}");
+}
+
+#[test]
 fn timestamps_uuid_json_defaults() {
     let (_d, db) = open_tmp();
     q(&db, "CREATE TABLE doc (id UUID PRIMARY KEY DEFAULT uuid7(), meta JSON, at TIMESTAMP DEFAULT now(), blob BLOB)");

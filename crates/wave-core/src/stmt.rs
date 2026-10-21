@@ -5,11 +5,20 @@ use crate::expr::Expr;
 use crate::value::Value;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct TableRef {
     pub name: String,
     #[serde(default)]
     pub alias: Option<String>,
+    /// Derived table / subquery in `FROM` (when set, `name` is unused).
+    #[serde(default)]
+    pub subquery: Option<Box<SelectStmt>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CteEntry {
+    pub name: String,
+    pub query: SelectStmt,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -20,7 +29,7 @@ pub enum JoinKind {
     Left,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Join {
     #[serde(default)]
     pub kind: JoinKind,
@@ -28,7 +37,7 @@ pub struct Join {
     pub on: Expr,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "t", rename_all = "camelCase")]
 pub enum SelectItem {
     Star {
@@ -42,16 +51,18 @@ pub enum SelectItem {
     },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct OrderItem {
     pub expr: Expr,
     #[serde(default)]
     pub desc: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectStmt {
+    #[serde(default)]
+    pub with: Vec<CteEntry>,
     #[serde(default)]
     pub from: Option<TableRef>,
     #[serde(default)]
