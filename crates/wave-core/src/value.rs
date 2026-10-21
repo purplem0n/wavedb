@@ -23,6 +23,10 @@ impl PartialEq for Value {
     }
 }
 
+/// JavaScript `Number.MAX_SAFE_INTEGER` / `MIN_SAFE_INTEGER` (IEEE-754 double).
+const JS_SAFE_INT_MAX: i64 = 9_007_199_254_740_991;
+const JS_SAFE_INT_MIN: i64 = -9_007_199_254_740_991;
+
 impl Value {
     pub fn from_json(j: &serde_json::Value) -> Value {
         use serde_json::Value as J;
@@ -47,6 +51,11 @@ impl Value {
                             return Value::Blob(bytes);
                         }
                     }
+                    if let Some(J::String(digits)) = m.get("$int") {
+                        if let Ok(i) = digits.parse::<i64>() {
+                            return Value::Int(i);
+                        }
+                    }
                 }
                 Value::Json(j.clone())
             }
@@ -57,7 +66,12 @@ impl Value {
         use serde_json::Value as J;
         match self {
             Value::Null => J::Null,
-            Value::Int(i) => J::from(*i),
+            Value::Int(i) if (*i >= JS_SAFE_INT_MIN && *i <= JS_SAFE_INT_MAX) => J::from(*i),
+            Value::Int(i) => {
+                let mut m = serde_json::Map::new();
+                m.insert("$int".into(), J::String(i.to_string()));
+                J::Object(m)
+            }
             Value::Real(f) => serde_json::Number::from_f64(*f).map(J::Number).unwrap_or(J::Null),
             Value::Text(s) => J::String(s.clone()),
             Value::Bool(b) => J::Bool(*b),
@@ -552,6 +566,16 @@ mod tests {
         let dec = decode_row(&bytes).unwrap();
         assert_eq!(dec.len(), 6);
         assert_eq!(dec[2].1, Value::Text("héllo".into()));
+    }
+
+    #[test]
+    fn json_int_outside_js_safe_range_uses_dollar_int() {
+        let wide = Value::Int(9_007_199_254_740_993);
+        let j = wide.to_json();
+        assert_eq!(j["$int"], "9007199254740993");
+        assert_eq!(Value::from_json(&j), wide);
+        let narrow = Value::Int(42);
+        assert_eq!(narrow.to_json(), serde_json::json!(42));
     }
 
     #[test]

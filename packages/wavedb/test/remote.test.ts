@@ -41,6 +41,19 @@ describe("remote (HTTP) mode", () => {
     await db.close();
   });
 
+  test("wide integers over HTTP", async () => {
+    const wide = table("wide", { id: int().primaryKey(), n: int().notNull() });
+    const wideSchema = { wide };
+    const { db } = await openTmp({ schema: wideSchema });
+    const server = await serve(db);
+    const remote = await connect(server.url, { schema: wideSchema });
+    const v = 9007199254740993n;
+    await remote.insert(wide).values({ id: 1, n: v });
+    expect((await remote.select().from(wide))[0]!.n).toBe(v);
+    await server.close();
+    await db.close();
+  });
+
   test("token auth", async () => {
     const { db } = await openTmp({ schema });
     const server = await serve(db, { token: "s3cret" });

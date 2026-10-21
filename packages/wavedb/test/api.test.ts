@@ -482,6 +482,21 @@ describe("schema push & migrations", () => {
   });
 });
 
+describe("wide integers", () => {
+  test("bigint round-trips through insert and select", async () => {
+    const wide = table("wide", { id: int().primaryKey(), n: int().notNull() });
+    const { db } = await openTmp({ schema: { wide } });
+    const v = 9007199254740993n;
+    await db.insert(wide).values({ id: 1, n: v });
+    const row = (await db.select().from(wide))[0]!;
+    expect(row.n).toBe(v);
+    expect(typeof row.n).toBe("bigint");
+    const sql = await db.sql<{ n: bigint }>`SELECT n FROM wide WHERE id = ${1}`;
+    expect(sql[0]!.n).toBe(v);
+    await db.close();
+  });
+});
+
 describe("persistence & ops", () => {
   test("data survives close and reopen; vacuum and stats work", async () => {
     const { db, dir } = await openTmp({ schema });

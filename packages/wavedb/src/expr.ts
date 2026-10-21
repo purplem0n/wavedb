@@ -42,10 +42,16 @@ export class Condition extends RawIR<boolean> {}
 // value encoding
 // ---------------------------------------------------------------------------
 
+const JS_SAFE_INT_MAX = 9007199254740991n;
+const JS_SAFE_INT_MIN = -9007199254740991n;
+
 export function encodeValue(v: unknown): unknown {
   if (v === undefined || v === null) return null;
   if (v instanceof Date) return v.getTime();
-  if (typeof v === "bigint") return Number(v);
+  if (typeof v === "bigint") {
+    if (v >= JS_SAFE_INT_MIN && v <= JS_SAFE_INT_MAX) return Number(v);
+    return { $int: v.toString() };
+  }
   if (v instanceof Uint8Array) return { $blob: Buffer.from(v).toString("base64") };
   return v;
 }
@@ -58,6 +64,12 @@ export function decodeValue(kind: ColumnKind | undefined, v: unknown): unknown {
     if (kind !== "json" && typeof o.$blob === "string" && Object.keys(o).length === 1) {
       return new Uint8Array(Buffer.from(o.$blob, "base64"));
     }
+    if (typeof o.$int === "string" && Object.keys(o).length === 1) {
+      return BigInt(o.$int);
+    }
+  }
+  if (kind === "int" && typeof v === "number" && Number.isInteger(v)) {
+    if (v > Number.MAX_SAFE_INTEGER || v < Number.MIN_SAFE_INTEGER) return BigInt(String(v));
   }
   return v;
 }
