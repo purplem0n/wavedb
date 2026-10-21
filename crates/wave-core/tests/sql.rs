@@ -404,6 +404,19 @@ fn persistence_across_reopen() {
 }
 
 #[test]
+fn read_only_autocommit_and_tables_do_not_count_as_rollbacks() {
+    let (_d, db) = open_tmp();
+    setup_users(&db);
+    for _ in 0..50 {
+        q(&db, "SELECT count(*) FROM users");
+    }
+    assert_eq!(db.tables().unwrap().len(), 1);
+    let s = db.engine().stats();
+    assert_eq!(s.rollbacks, 0, "read-only work must commit, not rollback on drop");
+    assert!(s.commits >= 51, "autocommit SELECTs and tables() should commit");
+}
+
+#[test]
 fn concurrent_inserts_with_autoincrement_have_unique_ids() {
     let (_d, db) = open_tmp();
     q(&db, "CREATE TABLE ev (id INT PRIMARY KEY AUTOINCREMENT, w INT, n INT)");

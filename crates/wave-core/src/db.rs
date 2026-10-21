@@ -59,6 +59,14 @@ impl Db {
         DbTxn::new(self.engine.begin(iso))
     }
 
+    /// Read-only snapshot work that must end in commit (not drop-as-rollback).
+    fn read_snapshot<T>(&self, f: impl FnOnce(&mut DbTxn) -> Result<T>) -> Result<T> {
+        let mut tx = self.begin(Isolation::Snapshot);
+        let out = f(&mut tx)?;
+        tx.commit()?;
+        Ok(out)
+    }
+
     /// Run a closure in a transaction, retrying on conflict.
     pub fn retry<T>(&self, iso: Isolation, mut f: impl FnMut(&mut DbTxn) -> Result<T>) -> Result<T> {
         let mut attempt = 0;
@@ -93,8 +101,7 @@ impl Db {
     }
 
     pub fn tables(&self) -> Result<Vec<TableDef>> {
-        let mut tx = self.begin(Isolation::Snapshot);
-        tx.list_tables()
+        self.read_snapshot(|tx| tx.list_tables())
     }
 }
 

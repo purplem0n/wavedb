@@ -1036,7 +1036,7 @@ impl DbTxn {
             let mut rt = eng2.begin(Isolation::Snapshot);
             let (lo, hi) = prefix_range(&t.row_prefix());
             let mut sc = rt.scan(lo, hi, true)?;
-            match sc.next() {
+            let next = match sc.next() {
                 Some(Ok((_, v))) => {
                     let row = t.decode_value(&v)?;
                     let p = t.pk_positions()[0];
@@ -1044,7 +1044,9 @@ impl DbTxn {
                 }
                 Some(Err(e)) => Err(e),
                 None => Ok(1),
-            }
+            };
+            rt.commit()?;
+            next
         })
     }
 

@@ -72,7 +72,6 @@ WaveDB is **early software** (0.1). The engine is well tested, but the on-disk f
 - **Schema changes:** column type / primary-key changes are reported (`diff`) but not applied automatically.
 - **No prebuilt binaries yet.** Build the addon locally with a Rust toolchain (`bun run build:native`); there are no published per-platform packages.
 - **Replication / sharding / encryption at rest** are out of scope for 0.1.
-- **Stats** count read-only autocommit transactions as rollbacks.
 
 ## Quick start
 
