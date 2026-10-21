@@ -1211,6 +1211,10 @@ impl DbTxn {
             }
             let mut row: Vec<Option<Value>> = vec![None; t.columns.len()];
             for (e, p) in exprs.iter().zip(&positions) {
+                // `{t:"func", name:"default"}` = DEFAULT keyword: leave the slot empty
+                if matches!(e, Expr::Func { name, args, .. } if args.is_empty() && name.eq_ignore_ascii_case("default")) {
+                    continue;
+                }
                 row[*p] = Some(eval_const(e)?);
             }
             let mut full: Vec<Value> = Vec::with_capacity(row.len());
