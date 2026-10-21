@@ -7,10 +7,17 @@ import { extname, join, normalize, resolve, sep } from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { WaveError, mapNativeError } from "./errors.ts";
 import type { Database, TxBackend } from "./db.ts";
+import { acquireLeaderLease, startLeaderRenewal, type LeaderLease } from "./leader.ts";
 
 export interface ServeOptions {
   port?: number;
   host?: string;
+  /** Path to database directory (for leader lease). */
+  dataPath?: string;
+  /** Acquire/renew a leader lease under `dataPath/.wave/leader.json`. */
+  leader?: boolean;
+  /** If leader acquisition fails, start HTTP in standby mode (503 on /api/run). */
+  standby?: boolean;
   /** require `Authorization: Bearer <token>` on /api/* */
   token?: string;
   /** directory with a built single-page app (e.g. Wave Studio) served at `/` */
@@ -79,6 +86,19 @@ export async function serve(db: Database<any>, opts: ServeOptions = {}): Promise
   const idleMs = opts.txIdleMs ?? 30_000;
   const txs = new Map<string, { tx: TxBackend; timer: ReturnType<typeof setTimeout> }>();
   const staticDir = opts.staticDir ? resolve(opts.staticDir) : undefined;
+  let stopLeader: (() => void) | undefined;
+  let leader: LeaderLease | undefined;
+  let active = true;
+  if (opts.leader && opts.dataPath) {
+    const got = acquireLeaderLease({ dataPath: opts.dataPath, token: opts.token });
+    if (!got.ok) {
+      if (!opts.standby) throw new WaveError(got.reason ?? "not leader", "WAVE_INVALID");
+      active = false;
+    } else if (got.lease) {
+      leader = got.lease;
+      stopLeader = startLeaderRenewal({ dataPath: opts.dataPath, token: opts.token }, leader.holder);
+    }
+  }
 
   const touch = (id: string) => {
     const e = txs.get(id);
@@ -109,6 +129,9 @@ export async function serve(db: Database<any>, opts: ServeOptions = {}): Promise
   async function api(req: IncomingMessage, res: ServerResponse, path: string) {
     const method = req.method ?? "GET";
     if (method === "GET" && path === "/api/ping") return json(res, 200, { ok: true });
+    if (method === "GET" && path === "/api/health")
+      return json(res, active ? 200 : 503, { ok: active, leader: leader ?? null, standby: !active });
+    if (!active) return json(res, 503, { error: { code: "WAVE_INVALID", message: "standby: not leader" } });
     if (!authorized(req)) return json(res, 401, { error: { code: "WAVE_INVALID", message: "unauthorized" } });
     if (method === "GET" && (path === "/api/tables" || path === "/api/schema")) return json(res, 200, await db.tables());
     if (method === "GET" && path === "/api/stats") return json(res, 200, await db.stats());
@@ -210,6 +233,7 @@ export async function serve(db: Database<any>, opts: ServeOptions = {}): Promise
     host,
     server,
     async close() {
+      stopLeader?.();
       for (const [id, e] of txs) {
         clearTimeout(e.timer);
         await Promise.resolve(e.tx.rollback()).catch(() => {});

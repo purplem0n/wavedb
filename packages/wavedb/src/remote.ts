@@ -12,6 +12,8 @@ export interface ConnectOptions<S extends SchemaMap> {
   /** apply the schema on connect (default false for remote) */
   push?: boolean;
   fetch?: typeof fetch;
+  /** Try URLs in order until one responds (failover). */
+  urls?: string[];
 }
 
 class Http {
@@ -94,9 +96,29 @@ class RemoteBackend implements Backend {
   close(): void {}
 }
 
+async function pickUrl(urls: string[], f: typeof fetch): Promise<string> {
+  let last: Error | undefined;
+  for (const u of urls) {
+    const base = u.replace(/\/+$/, "");
+    try {
+      const res = await f(`${base}/api/health`);
+      if (res.ok || res.status === 401) return base;
+      last = new Error(`HTTP ${res.status}`);
+    } catch (e) {
+      last = e as Error;
+    }
+  }
+  throw new WaveError(`no reachable WaveDB server (${last?.message ?? "unknown"})`, "WAVE_NETWORK");
+}
+
 /** Connect to a WaveDB server started with `wave serve` / `serve(db)`. */
-export async function connect<S extends SchemaMap = {}>(url: string, opts: ConnectOptions<S> = {}): Promise<Database<S>> {
-  const http = new Http(url.replace(/\/+$/, ""), opts.token, opts.fetch ?? fetch);
+export async function connect<S extends SchemaMap = {}>(
+  url: string,
+  opts: ConnectOptions<S> = {},
+): Promise<Database<S>> {
+  const candidates = opts.urls?.length ? opts.urls : [url];
+  const base = await pickUrl(candidates, opts.fetch ?? fetch);
+  const http = new Http(base, opts.token, opts.fetch ?? fetch);
   const db = new Database<S>(new RemoteBackend(http), (opts.schema ?? {}) as S);
   await http.call("GET", "/api/ping");
   if (opts.push) await db.push();

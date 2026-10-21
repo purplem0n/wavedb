@@ -470,8 +470,8 @@ describe("schema push & migrations", () => {
     const b = table("t", { id: int().primaryKey(), v: text(), w: int().notNull() });
     const d2 = await wave(`${dir}/m.wave`, { schema: { b }, push: false });
     const ops = await d2.diff();
-    expect(ops.some((o) => o.op === "conflict" && /type/.test(o.description))).toBe(true);
-    await expect(d2.push()).rejects.toThrow(/cannot be applied/);
+    expect(ops.some((o) => o.op === "rebuildTable")).toBe(true);
+    await expect(d2.push()).rejects.toThrow(/allowDestructive/);
     await d2.close();
   });
 

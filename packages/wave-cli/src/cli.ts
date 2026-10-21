@@ -43,7 +43,7 @@ interface Args {
   flags: Record<string, string | true>;
 }
 
-const BOOL_FLAGS = new Set(["open", "json", "force", "help", "no-open", "cors"]);
+const BOOL_FLAGS = new Set(["open", "json", "force", "help", "no-open", "cors", "standby", "leader"]);
 
 export function parseArgs(argv: string[]): Args {
   const [cmd = "help", ...rest] = argv;
@@ -260,6 +260,9 @@ export async function run(argv: string[], io: IO): Promise<RunResult> {
         host: typeof flags.host === "string" ? flags.host : "127.0.0.1",
         token: typeof flags.token === "string" ? flags.token : undefined,
         cors: !!flags.cors,
+        dataPath: resolve(path),
+        leader: flags.leader !== false,
+        standby: !!flags.standby,
       });
       io.out(`WaveDB serving ${resolve(path)} at ${server.url}\n`);
       return { code: 0, running: withDb(server, db) };
