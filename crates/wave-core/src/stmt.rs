@@ -58,6 +58,14 @@ pub struct OrderItem {
     pub desc: bool,
 }
 
+/// `UNION` / `UNION ALL` with the right-hand select (left-hand is `self`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UnionOp {
+    pub all: bool,
+    pub right: Box<SelectStmt>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectStmt {
@@ -83,6 +91,8 @@ pub struct SelectStmt {
     pub offset: Option<i64>,
     #[serde(default)]
     pub distinct: bool,
+    #[serde(default)]
+    pub union: Option<UnionOp>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -175,6 +185,24 @@ pub enum Statement {
     Explain {
         stmt: Box<Statement>,
     },
+    #[serde(rename_all = "camelCase")]
+    CreateView {
+        name: String,
+        query: SelectStmt,
+        #[serde(default)]
+        or_replace: bool,
+        #[serde(default)]
+        if_not_exists: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    DropView {
+        name: String,
+        #[serde(default)]
+        if_exists: bool,
+    },
+    Begin,
+    Commit,
+    Rollback,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

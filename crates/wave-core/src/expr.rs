@@ -1,7 +1,7 @@
 //! Expression IR (JSON-serializable), binder and evaluator.
 
 use crate::error::{Error, Result};
-use crate::stmt::SelectStmt;
+use crate::stmt::{OrderItem, SelectStmt};
 use crate::value::{now_ms, sql_cmp, uuid4, uuid7, ColumnType, Value};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -114,6 +114,25 @@ pub enum Expr {
         #[serde(default)]
         negated: bool,
     },
+    Window {
+        kind: WindowKind,
+        #[serde(default)]
+        arg: Option<Box<Expr>>,
+        #[serde(default)]
+        partition_by: Vec<Expr>,
+        #[serde(default)]
+        order_by: Vec<OrderItem>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowKind {
+    RowNumber,
+    Rank,
+    DenseRank,
+    Sum,
+    Avg,
 }
 
 impl Expr {
@@ -158,6 +177,8 @@ pub enum BExpr {
     SubqueryScalar(Arc<SubqueryResult>),
     /// Materialized uncorrelated `IN (SELECT …)` (compare to column 0).
     InSubquery(Box<BExpr>, Arc<SubqueryResult>, bool),
+    /// Window function placeholder; index into the executor's window spec list.
+    Window(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,12 +231,21 @@ pub struct BindCx<'a> {
     /// Materialized subquery results indexed by id.
     pub subqueries: &'a [SubqueryResult],
     pub next_subquery: usize,
+    pub windows: Vec<BoundWindowSpec>,
 }
 
 #[derive(Clone, Debug)]
 pub struct SubqueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<Value>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BoundWindowSpec {
+    pub kind: WindowKind,
+    pub arg: Option<BExpr>,
+    pub partition_by: Vec<BExpr>,
+    pub order_by: Vec<(BExpr, bool)>,
 }
 
 impl<'a> BindCx<'a> {
@@ -227,6 +257,7 @@ impl<'a> BindCx<'a> {
             aliases: vec![],
             subqueries: &[],
             next_subquery: 0,
+            windows: vec![],
         }
     }
 
@@ -295,6 +326,22 @@ fn walk_expr(e: &Expr, f: &mut impl FnMut(&Expr)) {
                 walk_expr(o, f);
             }
         }
+        Expr::Window {
+            arg,
+            partition_by,
+            order_by,
+            ..
+        } => {
+            if let Some(a) = arg {
+                walk_expr(a, f);
+            }
+            for p in partition_by {
+                walk_expr(p, f);
+            }
+            for o in order_by {
+                walk_expr(&o.expr, f);
+            }
+        }
         Expr::Subquery { .. } | Expr::InSubquery { .. } | Expr::Col { .. } | Expr::Lit { .. } => {}
     }
 }
@@ -358,10 +405,20 @@ pub fn references_outer_aliases(st: &SelectStmt, outer: &std::collections::HashS
                     || else_.as_deref().map_or(false, |o| expr_hit(o, outer))
             }
             Expr::Subquery { query, .. } => references_outer_aliases(query, outer),
+            Expr::Window {
+                arg,
+                partition_by,
+                order_by,
+                ..
+            } => {
+                arg.as_deref().map_or(false, |a| expr_hit(a, outer))
+                    || partition_by.iter().any(|p| expr_hit(p, outer))
+                    || order_by.iter().any(|o| expr_hit(&o.expr, outer))
+            }
             _ => false,
         }
     }
-    st.where_.as_ref().map_or(false, |e| expr_hit(e, outer))
+    let mut hit = st.where_.as_ref().map_or(false, |e| expr_hit(e, outer))
         || st.group_by.iter().any(|g| expr_hit(g, outer))
         || st.having.as_ref().map_or(false, |e| expr_hit(e, outer))
         || st.order_by.iter().any(|o| expr_hit(&o.expr, outer))
@@ -375,7 +432,11 @@ pub fn references_outer_aliases(st: &SelectStmt, outer: &std::collections::HashS
                 .as_deref()
                 .map_or(false, |q| references_outer_aliases(q, outer))
         })
-        || st.with.iter().any(|c| references_outer_aliases(&c.query, outer))
+        || st.with.iter().any(|c| references_outer_aliases(&c.query, outer));
+    if let Some(u) = &st.union {
+        hit = hit || references_outer_aliases(&u.right, outer);
+    }
+    hit
 }
 
 pub fn collect_subqueries(st: &SelectStmt) -> Vec<SelectStmt> {
@@ -401,7 +462,50 @@ pub fn collect_subqueries(st: &SelectStmt) -> Vec<SelectStmt> {
     for o in &st.order_by {
         walk_subqueries_in_expr(&o.expr, &mut take);
     }
+    if let Some(u) = &st.union {
+        out.extend(collect_subqueries(&u.right));
+    }
     out
+}
+
+pub fn contains_window(e: &Expr) -> bool {
+    match e {
+        Expr::Window { .. } => true,
+        Expr::Bin { l, r, .. } => contains_window(l) || contains_window(r),
+        Expr::Not { e } | Expr::Neg { e } | Expr::IsNull { e, .. } => contains_window(e),
+        Expr::In { e, list, .. } => contains_window(e) || list.iter().any(contains_window),
+        Expr::InSubquery { e, .. } => contains_window(e),
+        Expr::Between { e, lo, hi, .. } => {
+            contains_window(e) || contains_window(lo) || contains_window(hi)
+        }
+        Expr::Like { e, pattern, .. } => contains_window(e) || contains_window(pattern),
+        Expr::Func { args, .. } => args.iter().any(contains_window),
+        Expr::Subquery { query, .. } => stmt_contains_window(query),
+        Expr::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            operand.as_deref().map_or(false, contains_window)
+                || whens.iter().any(|(a, b)| contains_window(a) || contains_window(b))
+                || else_.as_deref().map_or(false, contains_window)
+        }
+        _ => false,
+    }
+}
+
+pub fn stmt_contains_window(st: &SelectStmt) -> bool {
+    use crate::stmt::SelectItem;
+    st.where_.as_ref().map_or(false, contains_window)
+        || st.group_by.iter().any(|g| contains_window(g))
+        || st.having.as_ref().map_or(false, contains_window)
+        || st.order_by.iter().any(|o| contains_window(&o.expr))
+        || st.columns.iter().any(|c| match c {
+            SelectItem::Expr { expr, .. } => contains_window(expr),
+            _ => false,
+        })
+        || st.joins.iter().any(|j| contains_window(&j.on))
+        || st.union.as_ref().map_or(false, |u| stmt_contains_window(&u.right))
 }
 
 pub fn stmt_contains_agg(st: &SelectStmt) -> bool {
@@ -532,6 +636,36 @@ pub fn bind(e: &Expr, cx: &mut BindCx) -> Result<BExpr> {
                 *negated,
             )
         }
+        Expr::Window {
+            kind,
+            arg,
+            partition_by,
+            order_by,
+        } => {
+            if cx.allow_aggs {
+                return Err(Error::Sql("window functions are not allowed with GROUP BY aggregates".into()));
+            }
+            let saved = cx.allow_aggs;
+            cx.allow_aggs = false;
+            let arg_b = match arg {
+                Some(a) => Some(bind(a, cx)?),
+                None => None,
+            };
+            let part_b: Vec<BExpr> = partition_by.iter().map(|p| bind(p, cx)).collect::<Result<_>>()?;
+            let order_b: Vec<(BExpr, bool)> = order_by
+                .iter()
+                .map(|o| Ok((bind(&o.expr, cx)?, o.desc)))
+                .collect::<Result<_>>()?;
+            cx.allow_aggs = saved;
+            let id = cx.windows.len();
+            cx.windows.push(BoundWindowSpec {
+                kind: *kind,
+                arg: arg_b,
+                partition_by: part_b,
+                order_by: order_b,
+            });
+            BExpr::Window(id)
+        }
     })
 }
 
@@ -555,6 +689,7 @@ pub fn refs_col_ge(e: &BExpr, from: usize) -> bool {
         }
         BExpr::SubqueryScalar(_) => false,
         BExpr::InSubquery(e, _, _) => refs_col_ge(e, from),
+        BExpr::Window(_) => false,
     }
 }
 
@@ -721,6 +856,7 @@ pub fn eval(e: &BExpr, row: &[Value], aggs: &[Value]) -> Result<Value> {
                 Value::Bool(*neg)
             }
         }
+        BExpr::Window(_) => Value::Null,
     })
 }
 

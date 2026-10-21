@@ -735,6 +735,81 @@ fn correlated_subquery_is_rejected() {
 }
 
 #[test]
+fn create_view_select_and_drop() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE v_users (id INT PRIMARY KEY, name TEXT)");
+    q(&db, "INSERT INTO v_users VALUES (1, 'Ada'), (2, 'Bob')");
+    q(
+        &db,
+        "CREATE VIEW active_users AS SELECT id, name FROM v_users WHERE id > 0",
+    );
+    assert_eq!(
+        q(&db, "SELECT name FROM active_users ORDER BY id"),
+        vec![vec![t("Ada")], vec![t("Bob")]]
+    );
+    q(&db, "DROP VIEW active_users");
+    assert!(db.execute_sql("SELECT * FROM active_users", &[]).is_err());
+}
+
+#[test]
+fn foreign_key_rejects_orphan_insert() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE fk_parent (id INT PRIMARY KEY)");
+    q(
+        &db,
+        "CREATE TABLE fk_child (id INT PRIMARY KEY, parent_id INT, FOREIGN KEY (parent_id) REFERENCES fk_parent(id))",
+    );
+    q(&db, "INSERT INTO fk_parent VALUES (1)");
+    q(&db, "INSERT INTO fk_child VALUES (1, 1)");
+    let e = db
+        .execute_sql("INSERT INTO fk_child VALUES (2, 99)", &[])
+        .unwrap_err();
+    assert!(matches!(e, Error::Constraint(_)), "{e}");
+}
+
+#[test]
+fn union_distinct_and_all() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE u (id INT PRIMARY KEY, tag TEXT)");
+    q(&db, "INSERT INTO u VALUES (1,'a'),(2,'b')");
+    assert_eq!(
+        q(&db, "SELECT tag FROM u UNION SELECT tag FROM u"),
+        vec![vec![t("a")], vec![t("b")]]
+    );
+    assert_eq!(
+        q(&db, "SELECT tag FROM u UNION ALL SELECT tag FROM u").len(),
+        4
+    );
+}
+
+#[test]
+fn window_row_number() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE w (id INT PRIMARY KEY, g INT)");
+    q(&db, "INSERT INTO w VALUES (1,1),(2,1),(3,2)");
+    let rows = q(
+        &db,
+        "SELECT row_number() OVER (PARTITION BY g ORDER BY id) AS rn FROM w ORDER BY id",
+    );
+    assert_eq!(rows, vec![vec![i(1)], vec![i(2)], vec![i(1)]]);
+}
+
+#[test]
+fn sql_begin_commit_batch() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE tx_t (id INT PRIMARY KEY, n INT)");
+    db.execute_sql(
+        "BEGIN; INSERT INTO tx_t VALUES (1, 10); COMMIT",
+        &[],
+    )
+    .unwrap();
+    assert_eq!(q(&db, "SELECT n FROM tx_t WHERE id = 1"), vec![vec![i(10)]]);
+    db.execute_sql("BEGIN; INSERT INTO tx_t VALUES (2, 20); ROLLBACK", &[])
+        .unwrap();
+    assert_eq!(q(&db, "SELECT count(*) FROM tx_t"), vec![vec![i(1)]]);
+}
+
+#[test]
 fn timestamps_uuid_json_defaults() {
     let (_d, db) = open_tmp();
     q(&db, "CREATE TABLE doc (id UUID PRIMARY KEY DEFAULT uuid7(), meta JSON, at TIMESTAMP DEFAULT now(), blob BLOB)");

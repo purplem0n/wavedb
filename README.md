@@ -65,8 +65,8 @@ WaveDB is **early software** (0.1). The engine is well tested, but the on-disk f
 
 ### Deferred / known gaps
 
-- **Single process owns the files.** fjall holds a directory lock, so a second process cannot open the same `data.wave`; use `wave serve` + `connect()`. There is no automatic host election / failover yet.
-- **SQL subset:** no set operations (`UNION`), window functions, views, triggers, foreign-key *enforcement* (`.references()` only drives the relational `with` loader), or `BEGIN/COMMIT` statements (use `db.tx()`). Identifiers are case-sensitive.
+- **Single process owns the files.** fjall holds a directory lock, so a second process cannot open the same `data.wave`; use `wave serve` + `connect()`. Optional leader lease + `connect({ urls })` failover — see [deployment](docs/deployment.md).
+- **SQL subset:** no triggers; correlated subqueries not supported. Identifiers are case-sensitive. Prefer `db.tx()` over ad-hoc SQL sessions for app code.
 - **Replication / sharding / encryption at rest** are out of scope for 0.1.
 
 ## Install
@@ -77,7 +77,7 @@ From npm (prebuilt native addon for your OS/CPU via optional `wavedb-<platform>-
 npm install wavedb    # or: bun add wavedb / pnpm add wavedb
 ```
 
-Node ≥ 20 or Bun ≥ 1.1. If no prebuild matches your platform, build from source: `bun run build:native` (requires Rust stable). See **Production & deployment** below when you ship an app.
+Node ≥ 20 or Bun ≥ 1.1. If no prebuild matches your platform, build from source: `bun run build:native` (requires Rust stable). See [Production & deployment](docs/deployment.md) when you ship an app.
 
 ## Quick start (monorepo / from source)
 

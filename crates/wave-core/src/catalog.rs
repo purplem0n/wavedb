@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! 01 ++ table_name                      -> TableDef (JSON)
+//! 03 ++ view_name                       -> ViewDef (JSON)
 //! 02 6e                                 -> next object id (u32 BE)
 //! 10 ++ table_id ++ pk                  -> row
 //! 20 ++ index_id ++ cols ++ pk          -> pk            (secondary index entry)
@@ -13,10 +14,12 @@
 
 use crate::error::{Error, Result};
 use crate::kv::{prefix_range, Txn};
+use crate::stmt::SelectStmt;
 use crate::value::{decode_row, encode_key_value, encode_row, ColumnType, Value};
 use serde::{Deserialize, Serialize};
 
 pub const CAT_PREFIX: u8 = 0x01;
+pub const VIEW_PREFIX: u8 = 0x03;
 pub const META_NEXT_ID: [u8; 2] = [0x02, b'n'];
 pub const ROW_PREFIX: u8 = 0x10;
 pub const IDX_PREFIX: u8 = 0x20;
@@ -32,6 +35,19 @@ pub enum ColDefault {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ForeignKeyRef {
+    pub table: String,
+    pub columns: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ForeignKeyDef {
+    pub columns: Vec<String>,
+    pub ref_table: String,
+    pub ref_columns: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ColumnDef {
     pub id: u16,
     pub name: String,
@@ -41,6 +57,12 @@ pub struct ColumnDef {
     pub nullable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<ColDefault>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ViewDef {
+    pub name: String,
+    pub query: SelectStmt,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -63,6 +85,8 @@ pub struct TableDef {
     pub auto_increment: bool,
     #[serde(default)]
     pub indexes: Vec<IndexDef>,
+    #[serde(default)]
+    pub foreign_keys: Vec<ForeignKeyDef>,
     pub next_col_id: u16,
     /// Bumped on every schema change.
     #[serde(default)]
@@ -173,6 +197,44 @@ pub fn catalog_key(name: &str) -> Vec<u8> {
     k
 }
 
+pub fn view_key(name: &str) -> Vec<u8> {
+    let mut k = vec![VIEW_PREFIX];
+    k.extend_from_slice(name.as_bytes());
+    k
+}
+
+pub fn load_view(txn: &mut Txn, name: &str) -> Result<Option<ViewDef>> {
+    match txn.get(&view_key(name))? {
+        None => Ok(None),
+        Some(b) => Ok(Some(serde_json::from_slice(&b)?)),
+    }
+}
+
+pub fn create_view(txn: &mut Txn, name: &str, query: SelectStmt, or_replace: bool, if_not_exists: bool) -> Result<()> {
+    if !valid_ident(name) {
+        return Err(Error::Invalid("invalid view name".into()));
+    }
+    if load_table(txn, name)?.is_some() {
+        return Err(Error::Constraint(format!("table \"{name}\" already exists")));
+    }
+    match load_view(txn, name)? {
+        Some(_) if if_not_exists => return Ok(()),
+        Some(_) if or_replace => {}
+        Some(_) => return Err(Error::Constraint(format!("view \"{name}\" already exists"))),
+        None => {}
+    }
+    let def = ViewDef { name: name.into(), query };
+    txn.put(&view_key(name), &serde_json::to_vec(&def)?)
+}
+
+pub fn drop_view(txn: &mut Txn, name: &str, if_exists: bool) -> Result<()> {
+    match load_view(txn, name)? {
+        Some(_) => txn.delete(&view_key(name)),
+        None if if_exists => Ok(()),
+        None => Err(Error::NotFound(format!("view \"{name}\" does not exist"))),
+    }
+}
+
 pub fn load_table(txn: &mut Txn, name: &str) -> Result<Option<TableDef>> {
     match txn.get(&catalog_key(name))? {
         None => Ok(None),
@@ -227,6 +289,8 @@ pub struct ColumnSpec {
     pub primary_key: bool,
     #[serde(default)]
     pub auto_increment: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub references: Option<ForeignKeyRef>,
 }
 
 fn yes() -> bool {
@@ -252,6 +316,8 @@ pub struct TableSpec {
     pub primary_key: Option<Vec<String>>,
     #[serde(default)]
     pub indexes: Vec<IndexSpec>,
+    #[serde(default)]
+    pub foreign_keys: Vec<ForeignKeyDef>,
     #[serde(default)]
     pub if_not_exists: bool,
 }
@@ -279,6 +345,9 @@ pub fn create_table(txn: &mut Txn, spec: &TableSpec) -> Result<Option<TableDef>>
         }
         return Err(Error::Constraint(format!("table \"{}\" already exists", spec.name)));
     }
+    if load_view(txn, &spec.name)?.is_some() {
+        return Err(Error::Constraint(format!("view \"{}\" already exists", spec.name)));
+    }
     if spec.columns.is_empty() {
         return Err(Error::Invalid("table needs at least one column".into()));
     }
@@ -299,6 +368,7 @@ pub fn create_table(txn: &mut Txn, spec: &TableSpec) -> Result<Option<TableDef>>
         )));
     }
     let mut columns = Vec::new();
+    let mut foreign_keys = Vec::new();
     let mut auto_increment = false;
     for (i, c) in spec.columns.iter().enumerate() {
         if !valid_ident(&c.name) {
@@ -323,6 +393,13 @@ pub fn create_table(txn: &mut Txn, spec: &TableSpec) -> Result<Option<TableDef>>
             nullable: c.nullable && !is_pk,
             default: c.default.clone(),
         });
+        if let Some(r) = &c.references {
+            foreign_keys.push(ForeignKeyDef {
+                columns: vec![c.name.clone()],
+                ref_table: r.table.clone(),
+                ref_columns: r.columns.clone(),
+            });
+        }
     }
     for p in &pk {
         if !columns.iter().any(|c| &c.name == p) {
@@ -337,6 +414,7 @@ pub fn create_table(txn: &mut Txn, spec: &TableSpec) -> Result<Option<TableDef>>
         primary_key: pk,
         auto_increment,
         indexes: vec![],
+        foreign_keys,
         next_col_id: spec.columns.len() as u16,
         version: 1,
     };
@@ -352,6 +430,9 @@ pub fn create_table(txn: &mut Txn, spec: &TableSpec) -> Result<Option<TableDef>>
     }
     for is in &idx_specs {
         add_index_def(txn, &mut table, is)?;
+    }
+    for fk in &spec.foreign_keys {
+        table.foreign_keys.push(fk.clone());
     }
     save_table(txn, &table)?;
     Ok(Some(table))

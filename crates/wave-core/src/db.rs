@@ -5,11 +5,16 @@ use crate::error::{Error, Result};
 use crate::exec::DbTxn;
 use crate::kv::{Engine, Isolation, Options};
 use crate::stmt::{QueryResult, Statement};
+use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Arc;
 
 /// Maximum automatic retries for single-statement (autocommit) conflicts.
 pub const AUTOCOMMIT_RETRIES: usize = 200;
+
+thread_local! {
+    static SESSION_TX: RefCell<Option<DbTxn>> = const { RefCell::new(None) };
+}
 
 /// Tiny per-thread xorshift for back-off jitter (no external RNG needed).
 fn jitter(bound: u64) -> u64 {
@@ -90,14 +95,51 @@ impl Db {
         }
     }
 
+    fn run_statement(&self, stmt: &Statement) -> Result<QueryResult> {
+        match stmt {
+            Statement::Begin => SESSION_TX.with(|slot| {
+                let mut s = slot.borrow_mut();
+                if s.is_some() {
+                    return Err(Error::Sql("already in transaction".into()));
+                }
+                *s = Some(self.begin(Isolation::Snapshot));
+                Ok(QueryResult::default())
+            }),
+            Statement::Commit => SESSION_TX.with(|slot| {
+                let tx = slot
+                    .borrow_mut()
+                    .take()
+                    .ok_or_else(|| Error::Sql("no active transaction".into()))?;
+                tx.commit()?;
+                Ok(QueryResult::default())
+            }),
+            Statement::Rollback => SESSION_TX.with(|slot| {
+                if let Some(tx) = slot.borrow_mut().take() {
+                    tx.rollback();
+                }
+                Ok(QueryResult::default())
+            }),
+            other => SESSION_TX.with(|slot| {
+                if let Some(tx) = slot.borrow_mut().as_mut() {
+                    return tx.execute(other);
+                }
+                self.retry(Isolation::Snapshot, |tx| tx.execute(other))
+            }),
+        }
+    }
+
     /// Execute one statement in its own transaction (auto-retried on conflict).
     pub fn execute(&self, stmt: &Statement) -> Result<QueryResult> {
-        self.retry(Isolation::Snapshot, |tx| tx.execute(stmt))
+        self.run_statement(stmt)
     }
 
     pub fn execute_sql(&self, sql: &str, params: &[crate::value::Value]) -> Result<QueryResult> {
         let stmts = crate::sql::parse_sql(sql, params)?;
-        self.retry(Isolation::Snapshot, |tx| tx.execute_all(&stmts))
+        let mut last = QueryResult::default();
+        for s in &stmts {
+            last = self.run_statement(s)?;
+        }
+        Ok(last)
     }
 
     pub fn tables(&self) -> Result<Vec<TableDef>> {

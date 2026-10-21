@@ -3,7 +3,7 @@
 
 use crate::catalog::*;
 use crate::error::{Error, Result};
-use crate::expr::*;
+use crate::expr::{WindowKind, *};
 use crate::stmt::*;
 use crate::value::{ColumnType, Value};
 use sqlparser::ast::{self as a, DataType};
@@ -64,6 +64,17 @@ fn conv_stmt(s: &a::Statement, cx: &mut Cx) -> Result<Statement> {
             }))
         }
         a::Statement::CreateTable(c) => conv_create_table(c, cx),
+        a::Statement::CreateView(cv) => {
+            if cv.materialized {
+                return unsupported("MATERIALIZED VIEW");
+            }
+            Ok(Statement::CreateView {
+                name: ident_name(&cv.name)?,
+                query: conv_query(&cv.query, cx)?,
+                or_replace: cv.or_replace,
+                if_not_exists: cv.if_not_exists,
+            })
+        }
         a::Statement::CreateIndex(ci) => Ok(Statement::CreateIndex {
             table: ident_name(&ci.table_name)?,
             index: IndexSpec {
@@ -102,6 +113,10 @@ fn conv_stmt(s: &a::Statement, cx: &mut Cx) -> Result<Statement> {
                         Some(t) => Some(ident_name(t)?),
                         None => None,
                     },
+                    if_exists: *if_exists,
+                }),
+                a::ObjectType::View => Ok(Statement::DropView {
+                    name,
                     if_exists: *if_exists,
                 }),
                 _ => unsupported("DROP of this object type"),
@@ -143,9 +158,9 @@ fn conv_stmt(s: &a::Statement, cx: &mut Cx) -> Result<Statement> {
         a::Statement::Explain { statement, .. } => Ok(Statement::Explain {
             stmt: Box::new(conv_stmt(statement, cx)?),
         }),
-        a::Statement::StartTransaction { .. } | a::Statement::Commit { .. } | a::Statement::Rollback { .. } => {
-            unsupported("BEGIN/COMMIT/ROLLBACK statements (use db.tx() / transactions API)")
-        }
+        a::Statement::StartTransaction { .. } => Ok(Statement::Begin),
+        a::Statement::Commit { .. } => Ok(Statement::Commit),
+        a::Statement::Rollback { .. } => Ok(Statement::Rollback),
         _ => unsupported("statement type"),
     }
 }
@@ -221,11 +236,7 @@ fn const_i64(e: &a::Expr, cx: &mut Cx) -> Result<i64> {
 }
 
 fn conv_query(q: &a::Query, cx: &mut Cx) -> Result<SelectStmt> {
-    let select = match &*q.body {
-        a::SetExpr::Select(s) => s,
-        _ => return unsupported("set operations / VALUES queries"),
-    };
-    let mut st = SelectStmt::default();
+    let mut st = conv_set_expr(&q.body, cx)?;
     if let Some(with) = &q.with {
         if with.recursive {
             return unsupported("recursive CTEs (WITH RECURSIVE)");
@@ -241,6 +252,67 @@ fn conv_query(q: &a::Query, cx: &mut Cx) -> Result<SelectStmt> {
             })
             .collect::<Result<_>>()?;
     }
+    if let Some(ob) = &q.order_by {
+        match &ob.kind {
+            a::OrderByKind::Expressions(list) => {
+                for o in list {
+                    st.order_by.push(OrderItem {
+                        expr: conv_expr(&o.expr, cx)?,
+                        desc: matches!(o.options.sort, Some(a::OrderBySort::Desc)),
+                    });
+                }
+            }
+            _ => return unsupported("ORDER BY ALL"),
+        }
+    }
+    match &q.limit_clause {
+        None => {}
+        Some(a::LimitClause::LimitOffset { limit, offset, .. }) => {
+            if let Some(l) = limit {
+                st.limit = Some(const_i64(l, cx)?);
+            }
+            if let Some(o) = offset {
+                st.offset = Some(const_i64(&o.value, cx)?);
+            }
+        }
+        Some(a::LimitClause::OffsetCommaLimit { offset, limit }) => {
+            st.offset = Some(const_i64(offset, cx)?);
+            st.limit = Some(const_i64(limit, cx)?);
+        }
+    }
+    Ok(st)
+}
+
+fn conv_set_expr(body: &a::SetExpr, cx: &mut Cx) -> Result<SelectStmt> {
+    match body {
+        a::SetExpr::Select(select) => conv_select(select, cx),
+        a::SetExpr::Query(q) => conv_query(q, cx),
+        a::SetExpr::SetOperation {
+            left,
+            op,
+            set_quantifier,
+            right,
+        } => {
+            if !matches!(op, a::SetOperator::Union) {
+                return unsupported("EXCEPT / INTERSECT set operations");
+            }
+            let all = matches!(
+                set_quantifier,
+                a::SetQuantifier::All | a::SetQuantifier::AllByName
+            );
+            let mut left_st = conv_set_expr(left, cx)?;
+            left_st.union = Some(UnionOp {
+                all,
+                right: Box::new(conv_set_expr(right, cx)?),
+            });
+            Ok(left_st)
+        }
+        _ => unsupported("VALUES queries in this position"),
+    }
+}
+
+fn conv_select(select: &a::Select, cx: &mut Cx) -> Result<SelectStmt> {
+    let mut st = SelectStmt::default();
     st.distinct = matches!(select.distinct, Some(a::Distinct::Distinct));
     if select.from.len() > 1 {
         return unsupported("comma joins (use JOIN ... ON)");
@@ -278,35 +350,26 @@ fn conv_query(q: &a::Query, cx: &mut Cx) -> Result<SelectStmt> {
         return unsupported("GROUP BY ALL");
     }
     st.having = opt_expr(&select.having, cx)?;
-    if let Some(ob) = &q.order_by {
-        match &ob.kind {
-            a::OrderByKind::Expressions(list) => {
-                for o in list {
-                    st.order_by.push(OrderItem {
-                        expr: conv_expr(&o.expr, cx)?,
-                        desc: matches!(o.options.sort, Some(a::OrderBySort::Desc)),
-                    });
-                }
-            }
-            _ => return unsupported("ORDER BY ALL"),
-        }
-    }
-    match &q.limit_clause {
-        None => {}
-        Some(a::LimitClause::LimitOffset { limit, offset, .. }) => {
-            if let Some(l) = limit {
-                st.limit = Some(const_i64(l, cx)?);
-            }
-            if let Some(o) = offset {
-                st.offset = Some(const_i64(&o.value, cx)?);
-            }
-        }
-        Some(a::LimitClause::OffsetCommaLimit { offset, limit }) => {
-            st.offset = Some(const_i64(offset, cx)?);
-            st.limit = Some(const_i64(limit, cx)?);
-        }
-    }
     Ok(st)
+}
+
+fn conv_window_spec(spec: &a::WindowSpec, cx: &mut Cx) -> Result<(Vec<Expr>, Vec<OrderItem>)> {
+    let partition_by = spec
+        .partition_by
+        .iter()
+        .map(|e| conv_expr(e, cx))
+        .collect::<Result<_>>()?;
+    let order_by = spec
+        .order_by
+        .iter()
+        .map(|o| {
+            Ok(OrderItem {
+                expr: conv_expr(&o.expr, cx)?,
+                desc: matches!(o.options.sort, Some(a::OrderBySort::Desc)),
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok((partition_by, order_by))
 }
 
 fn conv_table_ref(t: &a::TableFactor, cx: &mut Cx) -> Result<TableRef> {
@@ -424,6 +487,14 @@ fn map_type(dt: &DataType) -> Result<(ColumnType, bool)> {
     })
 }
 
+fn conv_fk(fk: &a::ForeignKeyConstraint) -> Result<ForeignKeyDef> {
+    Ok(ForeignKeyDef {
+        columns: fk.columns.iter().map(|i| i.value.clone()).collect(),
+        ref_table: ident_name(&fk.foreign_table)?,
+        ref_columns: fk.referred_columns.iter().map(|i| i.value.clone()).collect(),
+    })
+}
+
 fn conv_default(e: &a::Expr, cx: &mut Cx) -> Result<ColDefault> {
     let ex = conv_expr(e, cx)?;
     if let Expr::Func { name, .. } = &ex {
@@ -447,6 +518,7 @@ fn conv_column(c: &a::ColumnDef, cx: &mut Cx) -> Result<ColumnSpec> {
         unique: false,
         primary_key: false,
         auto_increment: false,
+        references: None,
     };
     for o in &c.options {
         match &o.option {
@@ -462,8 +534,21 @@ fn conv_column(c: &a::ColumnDef, cx: &mut Cx) -> Result<ColumnSpec> {
                 }
             }
             a::ColumnOption::Generated { .. } => auto = true,
-            a::ColumnOption::Check(_) | a::ColumnOption::ForeignKey(_) => {
-                return unsupported("CHECK / FOREIGN KEY constraints")
+            a::ColumnOption::Check(_) => return unsupported("CHECK constraints"),
+            a::ColumnOption::ForeignKey(fk) => {
+                let mut def = conv_fk(fk)?;
+                if def.columns.is_empty() {
+                    def.columns.push(spec.name.clone());
+                }
+                if def.columns.len() != 1 || def.columns[0] != spec.name {
+                    return Err(Error::Sql(
+                        "inline FOREIGN KEY must reference this column only".into(),
+                    ));
+                }
+                spec.references = Some(ForeignKeyRef {
+                    table: def.ref_table,
+                    columns: def.ref_columns,
+                });
             }
             _ => {}
         }
@@ -481,6 +566,7 @@ fn conv_create_table(c: &a::CreateTable, cx: &mut Cx) -> Result<Statement> {
         columns: c.columns.iter().map(|col| conv_column(col, cx)).collect::<Result<_>>()?,
         primary_key: None,
         indexes: vec![],
+        foreign_keys: vec![],
         if_not_exists: c.if_not_exists,
     };
     for tc in &c.constraints {
@@ -493,8 +579,9 @@ fn conv_create_table(c: &a::CreateTable, cx: &mut Cx) -> Result<Statement> {
                 columns: u.columns.iter().map(index_col_name).collect::<Result<_>>()?,
                 unique: true,
             }),
+            a::TableConstraint::ForeignKey(fk) => spec.foreign_keys.push(conv_fk(fk)?),
             a::TableConstraint::Index(_) => {}
-            _ => return unsupported("table constraint (supported: PRIMARY KEY, UNIQUE)"),
+            _ => return unsupported("table constraint (supported: PRIMARY KEY, UNIQUE, FOREIGN KEY)"),
         }
     }
     Ok(Statement::CreateTable(spec))
@@ -732,8 +819,40 @@ fn conv_expr(e: &a::Expr, cx: &mut Cx) -> Result<Expr> {
                 }
                 _ => return unsupported("function call form"),
             }
-            if f.over.is_some() {
-                return unsupported("window functions");
+            if let Some(over) = &f.over {
+                let a::WindowType::WindowSpec(spec) = over else {
+                    return unsupported("named window references");
+                };
+                if spec.window_frame.is_some() {
+                    return unsupported("window frame clause");
+                }
+                let lower = name.to_ascii_lowercase();
+                let kind = match lower.as_str() {
+                    "row_number" => WindowKind::RowNumber,
+                    "rank" => WindowKind::Rank,
+                    "dense_rank" => WindowKind::DenseRank,
+                    "sum" => WindowKind::Sum,
+                    "avg" => WindowKind::Avg,
+                    _ => return unsupported("window function"),
+                };
+                if matches!(kind, WindowKind::RowNumber | WindowKind::Rank | WindowKind::DenseRank) {
+                    if !args.is_empty() || star || distinct {
+                        return Err(Error::Sql(format!("{lower}() takes no arguments")));
+                    }
+                } else if args.len() != 1 {
+                    return Err(Error::Sql(format!("{lower}() requires one argument")));
+                }
+                let (partition_by, order_by) = conv_window_spec(spec, cx)?;
+                return Ok(Expr::Window {
+                    kind,
+                    arg: if args.is_empty() {
+                        None
+                    } else {
+                        Some(Box::new(args.into_iter().next().unwrap()))
+                    },
+                    partition_by,
+                    order_by,
+                });
             }
             Expr::Func {
                 name,
@@ -749,6 +868,103 @@ fn conv_expr(e: &a::Expr, cx: &mut Cx) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kv::{Durability, Options};
+    use crate::Db;
+
+    fn open_tmp() -> (tempfile::TempDir, Db) {
+        let d = tempfile::tempdir().unwrap();
+        let db = Db::open(
+            d.path().join("data.wave"),
+            Options {
+                durability: Durability::Async,
+                cache_bytes: 16 << 20,
+                temporary: false,
+            },
+        )
+        .unwrap();
+        (d, db)
+    }
+
+    fn q(db: &Db, sql: &str) -> Vec<Vec<Value>> {
+        db.execute_sql(sql, &[])
+            .unwrap_or_else(|e| panic!("{sql}: {e}"))
+            .rows
+    }
+
+    #[test]
+    fn union_happy_path() {
+        let (_d, db) = open_tmp();
+        q(&db, "CREATE TABLE a (id INT PRIMARY KEY, v INT)");
+        q(&db, "CREATE TABLE b (id INT PRIMARY KEY, v INT)");
+        q(&db, "INSERT INTO a VALUES (1,10),(2,20)");
+        q(&db, "INSERT INTO b VALUES (2,200),(3,30)");
+        assert_eq!(
+            q(
+                &db,
+                "SELECT v FROM a UNION SELECT v FROM b ORDER BY v"
+            ),
+            vec![vec![Value::Int(10)], vec![Value::Int(20)], vec![Value::Int(30)], vec![Value::Int(200)]]
+        );
+    }
+
+    #[test]
+    fn union_all_keeps_duplicates() {
+        let (_d, db) = open_tmp();
+        q(&db, "CREATE TABLE t (v INT)");
+        q(&db, "INSERT INTO t VALUES (1),(2),(1)");
+        assert_eq!(
+            q(&db, "SELECT v FROM t WHERE v = 1 UNION ALL SELECT v FROM t WHERE v = 1"),
+            vec![vec![Value::Int(1)], vec![Value::Int(1)]]
+        );
+    }
+
+    #[test]
+    fn window_row_number_partition() {
+        let (_d, db) = open_tmp();
+        q(&db, "CREATE TABLE w (g INT, v INT)");
+        q(&db, "INSERT INTO w VALUES (1,10),(1,20),(2,5),(2,15)");
+        assert_eq!(
+            q(
+                &db,
+                "SELECT g, v, row_number() OVER (PARTITION BY g ORDER BY v) AS rn FROM w ORDER BY g, v"
+            ),
+            vec![
+                vec![Value::Int(1), Value::Int(10), Value::Int(1)],
+                vec![Value::Int(1), Value::Int(20), Value::Int(2)],
+                vec![Value::Int(2), Value::Int(5), Value::Int(1)],
+                vec![Value::Int(2), Value::Int(15), Value::Int(2)],
+            ]
+        );
+    }
+
+    #[test]
+    fn union_empty_side() {
+        let (_d, db) = open_tmp();
+        q(&db, "CREATE TABLE e (v INT)");
+        q(&db, "INSERT INTO e VALUES (7)");
+        assert_eq!(
+            q(
+                &db,
+                "SELECT v FROM e WHERE v > 100 UNION SELECT v FROM e WHERE v = 7 ORDER BY v"
+            ),
+            vec![vec![Value::Int(7)]]
+        );
+        assert_eq!(
+            q(
+                &db,
+                "SELECT v FROM e WHERE v > 100 UNION SELECT v FROM e WHERE v > 100"
+            ),
+            Vec::<Vec<Value>>::new()
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_union_and_window_syntax() {
+        assert!(parse_sql("SELECT 1 UNION", &[]).is_err());
+        assert!(parse_sql("SELECT sum(x) OVER () FROM t", &[]).is_err());
+        let s = parse_sql("SELECT row_number() OVER (ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM t", &[]);
+        assert!(s.is_err());
+    }
 
     #[test]
     fn parses_select_with_params() {

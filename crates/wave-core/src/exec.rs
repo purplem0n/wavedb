@@ -1,7 +1,7 @@
 //! Statement executor: access-path planning, joins, aggregation, DML with
 //! secondary-index maintenance.
 
-use crate::catalog::{self, ColDefault, TableDef};
+use crate::catalog::{self, ColDefault, ForeignKeyDef, TableDef};
 use crate::error::{Error, Result};
 use crate::expr::*;
 use crate::kv::{prefix_end, prefix_range, CommitInfo, Isolation, KeyBound, Scan, Txn};
@@ -598,6 +598,13 @@ fn default_name(e: &Expr, i: usize) -> String {
     match e {
         Expr::Col { name, .. } => name.clone(),
         Expr::Func { name, .. } => name.to_lowercase(),
+        Expr::Window { kind, .. } => match kind {
+            WindowKind::RowNumber => "row_number".into(),
+            WindowKind::Rank => "rank".into(),
+            WindowKind::DenseRank => "dense_rank".into(),
+            WindowKind::Sum => "sum".into(),
+            WindowKind::Avg => "avg".into(),
+        },
         _ => format!("col{}", i + 1),
     }
 }
@@ -608,6 +615,170 @@ fn group_key(vals: &[Value]) -> Vec<u8> {
         encode_key_value(v, &mut k);
     }
     k
+}
+
+fn cmp_window_order(a: &[Value], b: &[Value], order: &[(BExpr, bool)]) -> Ordering {
+    for (e, desc) in order {
+        let va = eval(e, a, &[]).unwrap_or(Value::Null);
+        let vb = eval(e, b, &[]).unwrap_or(Value::Null);
+        let mut o = sort_cmp(&va, &vb);
+        if *desc {
+            o = o.reverse();
+        }
+        if o != Ordering::Equal {
+            return o;
+        }
+    }
+    Ordering::Equal
+}
+
+fn apply_windows(
+    specs: &[BoundWindowSpec],
+    select_b: &[BExpr],
+    sources: &[Vec<Value>],
+    rows: &mut [Vec<Value>],
+) -> Result<()> {
+    for (spec_id, spec) in specs.iter().enumerate() {
+        let out_cols: Vec<usize> = select_b
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| matches!(e, BExpr::Window(id) if *id == spec_id).then_some(i))
+            .collect();
+        if out_cols.is_empty() {
+            continue;
+        }
+        let mut parts: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+        for (i, src) in sources.iter().enumerate() {
+            let pk: Vec<Value> = spec
+                .partition_by
+                .iter()
+                .map(|e| eval(e, src, &[]))
+                .collect::<Result<_>>()?;
+            parts.entry(group_key(&pk)).or_default().push(i);
+        }
+        for indices in parts.values_mut() {
+            indices.sort_by(|&a, &b| cmp_window_order(&sources[a], &sources[b], &spec.order_by));
+            let mut row_num = 0i64;
+            let mut rank = 0i64;
+            let mut dense = 0i64;
+            let mut prev_order: Option<Vec<Value>> = None;
+            let mut run_sum_int: i64 = 0;
+            let mut run_sum_real: f64 = 0.0;
+            let mut run_real = false;
+            let mut run_cnt = 0i64;
+            for &idx in indices.iter() {
+                row_num += 1;
+                let order_vals: Vec<Value> = spec
+                    .order_by
+                    .iter()
+                    .map(|(e, _)| eval(e, &sources[idx], &[]))
+                    .collect::<Result<_>>()?;
+                if prev_order.as_ref().map_or(true, |p| order_vals != *p) {
+                    rank = row_num;
+                    dense += 1;
+                    prev_order = Some(order_vals);
+                }
+                let val = match spec.kind {
+                    WindowKind::RowNumber => Value::Int(row_num),
+                    WindowKind::Rank => Value::Int(rank),
+                    WindowKind::DenseRank => Value::Int(dense),
+                    WindowKind::Sum | WindowKind::Avg => {
+                        let arg = spec
+                            .arg
+                            .as_ref()
+                            .ok_or_else(|| Error::Sql("internal error: window aggregate missing arg".into()))?;
+                        let v = eval(arg, &sources[idx], &[])?;
+                        if v.is_null() {
+                            if spec.kind == WindowKind::Sum {
+                                if run_real {
+                                    Value::Real(run_sum_real)
+                                } else {
+                                    Value::Int(run_sum_int)
+                                }
+                            } else if run_cnt == 0 {
+                                Value::Null
+                            } else {
+                                Value::Real(run_sum_real / run_cnt as f64)
+                            }
+                        } else {
+                            match v {
+                                Value::Int(x) if !run_real => {
+                                    run_sum_int = run_sum_int.saturating_add(x);
+                                    run_cnt += 1;
+                                    if spec.kind == WindowKind::Sum {
+                                        Value::Int(run_sum_int)
+                                    } else {
+                                        run_sum_real = run_sum_int as f64;
+                                        Value::Real(run_sum_real / run_cnt as f64)
+                                    }
+                                }
+                                other => {
+                                    let x = other
+                                        .as_f64()
+                                        .ok_or_else(|| Error::Sql("window sum/avg requires numbers".into()))?;
+                                    if !run_real {
+                                        run_real = true;
+                                        run_sum_real = run_sum_int as f64;
+                                    }
+                                    run_sum_real += x;
+                                    run_cnt += 1;
+                                    if spec.kind == WindowKind::Sum {
+                                        Value::Real(run_sum_real)
+                                    } else {
+                                        Value::Real(run_sum_real / run_cnt as f64)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+                for c in &out_cols {
+                    rows[idx][*c] = val.clone();
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_post_select(st: &SelectStmt, col_names: &[String], mut rows: Vec<Vec<Value>>) -> Result<Vec<Vec<Value>>> {
+    if !st.order_by.is_empty() {
+        let layout = Layout {
+            cols: col_names.iter().map(|c| (String::new(), c.clone())).collect(),
+        };
+        let mut cx = BindCx::new(&layout);
+        let order_b: Vec<(BExpr, bool)> = st
+            .order_by
+            .iter()
+            .map(|o| Ok((bind(&o.expr, &mut cx)?, o.desc)))
+            .collect::<Result<_>>()?;
+        rows.sort_by(|a, b| {
+            for (e, desc) in &order_b {
+                let va = eval(e, a, &[]).unwrap_or(Value::Null);
+                let vb = eval(e, b, &[]).unwrap_or(Value::Null);
+                let mut o = sort_cmp(&va, &vb);
+                if *desc {
+                    o = o.reverse();
+                }
+                if o != Ordering::Equal {
+                    return o;
+                }
+            }
+            Ordering::Equal
+        });
+    }
+    if st.distinct {
+        let mut seen = HashSet::new();
+        rows.retain(|r| seen.insert(group_key(r)));
+    }
+    let offset = st.offset.unwrap_or(0).max(0) as usize;
+    if offset > 0 {
+        rows.drain(..offset.min(rows.len()));
+    }
+    if let Some(l) = st.limit {
+        rows.truncate(l.max(0) as usize);
+    }
+    Ok(rows)
 }
 
 fn int_increment_delta(e: &BExpr, col: usize) -> Option<i64> {
@@ -627,6 +798,130 @@ fn int_increment_delta(e: &BExpr, col: usize) -> Option<i64> {
         }
         _ => None,
     }
+}
+
+fn fk_values(t: &TableDef, row: &[Value], fk: &ForeignKeyDef) -> Result<Vec<Value>> {
+    let mut out = Vec::with_capacity(fk.columns.len());
+    for c in &fk.columns {
+        let p = t
+            .col_pos(c)
+            .ok_or_else(|| Error::NotFound(format!("column \"{c}\" not found")))?;
+        out.push(row[p].clone());
+    }
+    Ok(out)
+}
+
+fn fk_parent_exists(txn: &mut Txn, parent: &TableDef, fk: &ForeignKeyDef, child_vals: &[Value]) -> Result<bool> {
+    if child_vals.iter().any(|v| v.is_null()) {
+        return Ok(true);
+    }
+    if fk.ref_columns.len() != child_vals.len() {
+        return Err(Error::Invalid("foreign key column count mismatch".into()));
+    }
+    let mut row = vec![Value::Null; parent.columns.len()];
+    for (rc, val) in fk.ref_columns.iter().zip(child_vals) {
+        let p = parent
+            .col_pos(rc)
+            .ok_or_else(|| Error::NotFound(format!("column \"{rc}\" not found in \"{}\"", parent.name)))?;
+        row[p] = val.clone();
+    }
+    for pk_col in &parent.primary_key {
+        if row[parent.col_pos(pk_col).unwrap()].is_null() {
+            return Ok(false);
+        }
+    }
+    let pk = parent.pk_enc(&row);
+    Ok(txn.get(&parent.row_key(&pk))?.is_some())
+}
+
+fn fk_violation(child: &TableDef, fk: &ForeignKeyDef) -> Error {
+    Error::Constraint(format!(
+        "FOREIGN KEY constraint failed: {} ({}) REFERENCES {} ({})",
+        child.name,
+        fk.columns.join(", "),
+        fk.ref_table,
+        fk.ref_columns.join(", ")
+    ))
+}
+
+fn check_row_foreign_keys(txn: &mut Txn, t: &TableDef, row: &[Value]) -> Result<()> {
+    for fk in &t.foreign_keys {
+        let vals = fk_values(t, row, fk)?;
+        if vals.iter().all(|v| v.is_null()) {
+            continue;
+        }
+        let parent = catalog::require_table(txn, &fk.ref_table)?;
+        if !fk_parent_exists(txn, &parent, fk, &vals)? {
+            return Err(fk_violation(t, fk));
+        }
+    }
+    Ok(())
+}
+
+fn child_fk_matches(
+    child: &TableDef,
+    fk: &ForeignKeyDef,
+    child_row: &[Value],
+    parent: &TableDef,
+    parent_row: &[Value],
+) -> Result<bool> {
+    let cv = fk_values(child, child_row, fk)?;
+    if cv.iter().any(|v| v.is_null()) {
+        return Ok(false);
+    }
+    let mut pv = vec![];
+    for rc in &fk.ref_columns {
+        pv.push(parent_row[parent.col_pos(rc).unwrap()].clone());
+    }
+    Ok(cv == pv)
+}
+
+fn parent_ref_columns_changed(
+    txn: &mut Txn,
+    parent: &TableDef,
+    old: &[Value],
+    new: &[Value],
+) -> Result<bool> {
+    for child_def in catalog::list_tables(txn)? {
+        for fk in &child_def.foreign_keys {
+            if fk.ref_table != parent.name {
+                continue;
+            }
+            for rc in &fk.ref_columns {
+                let p = parent.col_pos(rc).unwrap();
+                if old[p] != new[p] {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn check_referencing_children(
+    txn: &mut Txn,
+    parent: &TableDef,
+    parent_row: &[Value],
+) -> Result<()> {
+    for child_def in catalog::list_tables(txn)? {
+        for fk in &child_def.foreign_keys {
+            if fk.ref_table != parent.name {
+                continue;
+            }
+            let (lo, hi) = prefix_range(&child_def.row_prefix());
+            let rows: Vec<(Vec<u8>, Vec<u8>)> = txn.scan(lo, hi, false)?.collect::<Result<_>>()?;
+            for (_, v) in rows {
+                let crow = child_def.decode_value(&v)?;
+                if child_fk_matches(&child_def, fk, &crow, parent, parent_row)? {
+                    return Err(Error::Constraint(format!(
+                        "FOREIGN KEY constraint failed: cannot delete or update parent row in \"{}\" — referenced from \"{}\"",
+                        parent.name, child_def.name
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn apply_row_update(txn: &mut Txn, t: &TableDef, old: &[Value], new: &[Value]) -> Result<()> {
@@ -767,6 +1062,22 @@ impl DbTxn {
                 self.tables.clear();
                 Ok(QueryResult::default())
             }
+            Statement::CreateView {
+                name,
+                query,
+                or_replace,
+                if_not_exists,
+            } => {
+                catalog::create_view(&mut self.txn, name, query.clone(), *or_replace, *if_not_exists)?;
+                Ok(QueryResult::default())
+            }
+            Statement::DropView { name, if_exists } => {
+                catalog::drop_view(&mut self.txn, name, *if_exists)?;
+                Ok(QueryResult::default())
+            }
+            Statement::Begin | Statement::Commit | Statement::Rollback => Err(Error::Sql(
+                "BEGIN/COMMIT/ROLLBACK in an open transaction are not supported (use db.execute_sql)".into(),
+            )),
         }
     }
 
@@ -785,6 +1096,51 @@ impl DbTxn {
         parent_ctes: &HashMap<String, Arc<SubqueryResult>>,
         outer_scope: &HashSet<String>,
     ) -> Result<QueryResult> {
+        if let Some(u) = &st.union {
+            let mut left = st.clone();
+            left.union = None;
+            left.order_by = vec![];
+            left.limit = None;
+            left.offset = None;
+            left.distinct = false;
+            if explain {
+                let mut rows = vec![vec![Value::Text(format!(
+                    "UNION{}",
+                    if u.all { " ALL" } else { "" }
+                ))]];
+                rows.extend(self.exec_select_impl(&left, true, parent_ctes, outer_scope)?.rows);
+                rows.extend(
+                    self.exec_select_impl(&u.right, true, parent_ctes, outer_scope)?
+                        .rows,
+                );
+                if stmt_contains_window(st) {
+                    rows.push(vec![Value::Text("WINDOW".into())]);
+                }
+                return Ok(QueryResult {
+                    columns: vec!["plan".into()],
+                    rows,
+                    ..Default::default()
+                });
+            }
+            let l = self.exec_select_impl(&left, false, parent_ctes, outer_scope)?;
+            let r = self.exec_select_impl(&u.right, false, parent_ctes, outer_scope)?;
+            if l.columns.len() != r.columns.len() {
+                return Err(Error::Sql("UNION requires the same number of columns".into()));
+            }
+            let mut rows = l.rows;
+            rows.extend(r.rows);
+            if !u.all {
+                let mut seen = HashSet::new();
+                rows.retain(|row| seen.insert(group_key(row)));
+            }
+            rows = apply_post_select(st, &l.columns, rows)?;
+            return Ok(QueryResult {
+                columns: l.columns,
+                rows,
+                ..Default::default()
+            });
+        }
+
         let mut cte_map = parent_ctes.clone();
         for cte in &st.with {
             if references_outer_aliases(&cte.query, outer_scope) {
@@ -850,6 +1206,17 @@ impl DbTxn {
                     columns: mat.columns.clone(),
                     rows: Arc::new(mat.rows.clone()),
                     label: tr.name.clone(),
+                }
+            } else if let Some(view) = catalog::load_view(&mut this.txn, &tr.name)? {
+                let qr = this.exec_select_impl(&view.query, false, cte_map, scope)?;
+                let cols = qr.columns.clone();
+                for c in &cols {
+                    layout.cols.push((alias.clone(), c.clone()));
+                }
+                SourceKind::Memory {
+                    columns: cols,
+                    rows: Arc::new(qr.rows),
+                    label: format!("VIEW {}", tr.name),
                 }
             } else {
                 let t = this.table(&tr.name)?;
@@ -983,6 +1350,8 @@ impl DbTxn {
             .map(|o| Ok((bind(&o.expr, &mut cx)?, o.desc)))
             .collect::<Result<_>>()?;
         let aggs = cx.aggs.clone();
+        let windows = cx.windows.clone();
+        let has_window = !windows.is_empty();
 
         // plan
         let mut conj: Vec<&BExpr> = vec![];
@@ -1022,11 +1391,14 @@ impl DbTxn {
         }
 
         if explain {
-            let rows: Vec<Vec<Value>> = sources
+            let mut rows: Vec<Vec<Value>> = sources
                 .iter()
                 .zip(plans.iter())
                 .map(|(s, p)| vec![Value::Text(s.describe(p))])
                 .collect();
+            if stmt_contains_window(st) {
+                rows.push(vec![Value::Text("WINDOW".into())]);
+            }
             return Ok(QueryResult {
                 columns: vec!["plan".into()],
                 rows,
@@ -1038,7 +1410,7 @@ impl DbTxn {
         let offset = st.offset.unwrap_or(0).max(0) as usize;
         let limit = st.limit.map(|l| l.max(0) as usize);
         let sorted_by_path = plans.first().map_or(true, |p| p.ordered) || order_b.is_empty();
-        let early_stop_at = if !agg_mode && !st.distinct && sorted_by_path {
+        let early_stop_at = if !agg_mode && !st.distinct && sorted_by_path && !has_window {
             limit.map(|l| l + offset)
         } else {
             None
@@ -1047,6 +1419,7 @@ impl DbTxn {
 
         // execute
         let mut out: Vec<(Vec<Value>, Vec<Value>)> = vec![]; // (sort keys, values)
+        let mut raw_sources: Vec<Vec<Value>> = vec![];
         let mut groups: Vec<Group> = vec![];
         let mut group_idx: HashMap<Vec<u8>, usize> = HashMap::new();
 
@@ -1088,6 +1461,9 @@ impl DbTxn {
                 } else {
                     vec![]
                 };
+                if has_window {
+                    raw_sources.push(row);
+                }
                 out.push((keys, vals));
             }
             Ok(())
@@ -1165,6 +1541,16 @@ impl DbTxn {
                     .collect::<Result<_>>()?;
                 out.push((keys, vals));
             }
+        }
+
+        if has_window {
+            let mut rows: Vec<Vec<Value>> = out.iter().map(|(_, v)| v.clone()).collect();
+            apply_windows(&windows, &select_b, &raw_sources, &mut rows)?;
+            out = out
+                .into_iter()
+                .zip(rows)
+                .map(|((k, _), v)| (k, v))
+                .collect();
         }
 
         if !order_b.is_empty() && (agg_mode || need_sort) {
@@ -1324,6 +1710,7 @@ impl DbTxn {
     }
 
     fn write_new(&mut self, t: &TableDef, row: &[Value]) -> Result<()> {
+        check_row_foreign_keys(&mut self.txn, t, row)?;
         let pk = t.pk_enc(row);
         self.txn.put(&t.row_key(&pk), &t.encode_value(row))?;
         for idx in &t.indexes {
@@ -1335,7 +1722,7 @@ impl DbTxn {
         Ok(())
     }
 
-    fn remove_row(&mut self, t: &TableDef, row: &[Value]) -> Result<()> {
+    fn remove_row_without_fk_check(&mut self, t: &TableDef, row: &[Value]) -> Result<()> {
         let pk = t.pk_enc(row);
         self.txn.delete(&t.row_key(&pk))?;
         for idx in &t.indexes {
@@ -1345,6 +1732,11 @@ impl DbTxn {
             self.txn.delete(&t.index_key(idx, row, &pk))?;
         }
         Ok(())
+    }
+
+    fn remove_row(&mut self, t: &TableDef, row: &[Value]) -> Result<()> {
+        check_referencing_children(&mut self.txn, t, row)?;
+        self.remove_row_without_fk_check(t, row)
     }
 
     fn unique_violation(t: &TableDef, which: &str, cols: &[String]) -> Error {
@@ -1375,14 +1767,20 @@ impl DbTxn {
     }
 
     fn update_row(&mut self, t: &TableDef, old: &[Value], new: &[Value]) -> Result<()> {
+        check_row_foreign_keys(&mut self.txn, t, new)?;
         let old_pk = t.pk_enc(old);
         let new_pk = t.pk_enc(new);
+        let refs_changed = parent_ref_columns_changed(&mut self.txn, t, old, new)?;
         if old_pk != new_pk {
-            self.remove_row(t, old)?;
+            check_referencing_children(&mut self.txn, t, old)?;
+            self.remove_row_without_fk_check(t, old)?;
             if let Some((_, which, cols)) = self.find_conflict(t, new)? {
                 return Err(Self::unique_violation(t, &which, &cols));
             }
             return self.write_new(t, new);
+        }
+        if refs_changed {
+            check_referencing_children(&mut self.txn, t, old)?;
         }
         apply_row_update(&mut self.txn, t, old, new)
     }
