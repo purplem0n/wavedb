@@ -14,12 +14,14 @@
     "test:rust": "cargo test --workspace",
     "test:ts": "bun run build:native && bun test packages/wavedb/test packages/wave-cli/test",
     "test:node": "node scripts/node-smoke.mjs",
+    "test:prebuild": "node scripts/prebuild-smoke.mjs",
     "bench": "bun run build:native && bun tools/bench/bench.ts",
     "studio": "bun packages/wave-cli/src/main.ts studio",
     "test:studio": "cd packages/wave-studio && ../../node_modules/.bin/tsc --noEmit && bunx vite build",
     "typecheck": "tsc -p packages/wavedb/tsconfig.json --noEmit && tsc -p packages/wave-cli/tsconfig.json --noEmit && tsc -p packages/wave-studio/tsconfig.json --noEmit"
   },
   "devDependencies": {
+    "@napi-rs/cli": "^2.18.4",
     "@types/bun": "latest",
     "@types/node": "latest",
     "typescript": "latest"

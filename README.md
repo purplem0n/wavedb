@@ -70,10 +70,19 @@ WaveDB is **early software** (0.1). The engine is well tested, but the on-disk f
 - **Integers are JSON numbers across the JS boundary**: values beyond 2^53 lose precision.
 - **SQL subset:** no CTEs, subqueries, set operations (`UNION`), window functions, views, triggers, foreign-key *enforcement* (`.references()` only drives the relational `with` loader), or `BEGIN/COMMIT` statements (use `db.tx()`). Identifiers are case-sensitive.
 - **Schema changes:** column type / primary-key changes are reported (`diff`) but not applied automatically.
-- **No prebuilt binaries yet.** Build the addon locally with a Rust toolchain (`bun run build:native`); there are no published per-platform packages.
 - **Replication / sharding / encryption at rest** are out of scope for 0.1.
 
-## Quick start
+## Install
+
+From npm (prebuilt native addon for your OS/CPU via optional `wavedb-<platform>-<arch>` packages):
+
+```bash
+npm install wavedb    # or: bun add wavedb / pnpm add wavedb
+```
+
+Node ≥ 20 or Bun ≥ 1.1. If no prebuild matches your platform, build from source: `bun run build:native` (requires Rust stable). See **Production & deployment** below when you ship an app.
+
+## Quick start (monorepo / from source)
 
 Requirements: Rust (stable) for the native addon, and [Bun](https://bun.sh) ≥ 1.1 or Node ≥ 20.
 

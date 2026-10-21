@@ -24,3 +24,4 @@ rmSync(dest, { force: true });
 copyFileSync(src, dest);
 if (process.platform === "darwin") spawnSync("codesign", ["--force", "--sign", "-", dest], { stdio: "ignore" });
 console.log(`native addon -> ${dest}`);
+spawnSync("node", [join(root, "scripts", "sync-native-packages.mjs")], { cwd: root, stdio: "inherit" });

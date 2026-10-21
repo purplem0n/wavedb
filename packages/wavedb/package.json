@@ -13,8 +13,27 @@
   "files": ["dist", "native", "README.md"],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "build:native": "napi build --release --cargo-cwd ../../crates/wave-napi -o native --output-dir native",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test test"
+  },
+  "napi": {
+    "binaryName": "wave",
+    "targets": [
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-pc-windows-msvc",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "optionalDependencies": {
+    "wavedb-darwin-arm64": "workspace:*",
+    "wavedb-darwin-x64": "workspace:*",
+    "wavedb-linux-arm64": "workspace:*",
+    "wavedb-linux-x64": "workspace:*",
+    "wavedb-win32-x64": "workspace:*"
   },
   "engines": { "node": ">=20" }
 }

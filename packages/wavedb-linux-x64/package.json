@@ -1,0 +1,10 @@
+{
+  "name": "wavedb-linux-x64",
+  "version": "0.1.0",
+  "description": "WaveDB native addon for Linux x64",
+  "license": "MIT",
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "main": "index.js",
+  "files": ["index.js", "wave.linux-x64.node"]
+}

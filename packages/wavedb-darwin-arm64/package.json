@@ -1,0 +1,10 @@
+{
+  "name": "wavedb-darwin-arm64",
+  "version": "0.1.0",
+  "description": "WaveDB native addon for macOS Apple Silicon",
+  "license": "MIT",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "main": "index.js",
+  "files": ["index.js", "wave.darwin-arm64.node"]
+}
