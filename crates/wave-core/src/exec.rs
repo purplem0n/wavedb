@@ -2,6 +2,7 @@
 //! secondary-index maintenance.
 
 use crate::catalog::{self, ColDefault, ForeignKeyDef, TableDef};
+use crate::value::ColumnType;
 use crate::error::{Error, Result};
 use crate::expr::*;
 use crate::kv::{prefix_end, prefix_range, CommitInfo, Isolation, KeyBound, Scan, Txn};
@@ -454,6 +455,122 @@ fn row_iter(table: &Arc<TableDef>, p: &AccessPlan, env: &[Value]) -> Result<RowI
         via_index: p.index.is_some(),
         table: table.clone(),
     })
+}
+
+/// `SELECT max(pk)` / `min(pk)` with no filters — one PK edge row instead of a full scan.
+fn pk_bound_agg_plan(
+    st: &SelectStmt,
+    sources: &[Source],
+    where_b: &Option<BExpr>,
+    aggs: &[AggSpec],
+    items: &[(String, Expr)],
+) -> Option<String> {
+    if st.distinct || !st.joins.is_empty() || !st.group_by.is_empty() || st.having.is_some() {
+        return None;
+    }
+    if sources.len() != 1 || where_b.is_some() || aggs.len() != 1 || items.len() != 1 {
+        return None;
+    }
+    let def = match &sources[0].kind {
+        SourceKind::Table(t) => t.as_ref(),
+        _ => return None,
+    };
+    let spec = &aggs[0];
+    if spec.distinct {
+        return None;
+    }
+    let edge = match spec.func {
+        AggFunc::Max => "MAX",
+        AggFunc::Min => "MIN",
+        _ => return None,
+    };
+    let BExpr::Col(col_idx) = spec.arg.as_ref()? else {
+        return None;
+    };
+    if def.primary_key.len() != 1 {
+        return None;
+    }
+    let pk_pos = def.col_pos(&def.primary_key[0])?;
+    if *col_idx != pk_pos || def.columns[pk_pos].ty != ColumnType::Int {
+        return None;
+    }
+    Some(format!(
+        "PK BOUND {edge}({}.{})",
+        def.name, def.primary_key[0]
+    ))
+}
+
+fn try_pk_bound_aggregate(
+    txn: &mut Txn,
+    st: &SelectStmt,
+    sources: &[Source],
+    where_b: &Option<BExpr>,
+    aggs: &[AggSpec],
+    items: &[(String, Expr)],
+    select_b: &[BExpr],
+    col_names: &[String],
+    order_b: &[(BExpr, bool)],
+    offset: usize,
+    limit: Option<usize>,
+    has_window: bool,
+) -> Result<Option<QueryResult>> {
+    if has_window {
+        return Ok(None);
+    }
+    let Some(plan_text) = pk_bound_agg_plan(st, sources, where_b, aggs, items) else {
+        return Ok(None);
+    };
+    let def = match &sources[0].kind {
+        SourceKind::Table(t) => t.clone(),
+        _ => return Ok(None),
+    };
+    let spec = &aggs[0];
+    let reverse = spec.func == AggFunc::Max;
+    let pk_pos = def.col_pos(&def.primary_key[0]).unwrap();
+    let mut plan = AccessPlan::default();
+    plan.reverse = reverse;
+    let mut it = row_iter(&def, &plan, &[])?;
+    let bound = if let Some(row) = it.next(txn)? {
+        row[pk_pos].clone()
+    } else {
+        Value::Null
+    };
+    let agg_vals = vec![bound];
+    let rep: Vec<Value> = vec![];
+    let vals: Vec<Value> = select_b
+        .iter()
+        .map(|e| eval(e, &rep, &agg_vals))
+        .collect::<Result<_>>()?;
+    let keys: Vec<Value> = order_b
+        .iter()
+        .map(|(e, _)| eval(e, &rep, &agg_vals))
+        .collect::<Result<_>>()?;
+    let mut out = vec![(keys, vals)];
+    if !order_b.is_empty() {
+        out.sort_by(|a, b| {
+            for (i, (_, desc)) in order_b.iter().enumerate() {
+                let o = sort_cmp(&a.0[i], &b.0[i]);
+                let o = if *desc { o.reverse() } else { o };
+                if o != Ordering::Equal {
+                    return o;
+                }
+            }
+            Ordering::Equal
+        });
+    }
+    let mut rows: Vec<Vec<Value>> = out.into_iter().map(|(_, v)| v).collect();
+    if offset > 0 {
+        rows.drain(..offset.min(rows.len()));
+    }
+    if let Some(l) = limit {
+        rows.truncate(l);
+    }
+    let _ = plan_text; // used by EXPLAIN path
+    Ok(Some(QueryResult {
+        columns: col_names.to_vec(),
+        rows,
+        ..Default::default()
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1391,6 +1508,13 @@ impl DbTxn {
         }
 
         if explain {
+            if let Some(fast) = pk_bound_agg_plan(st, &sources, &where_b, &aggs, &items) {
+                return Ok(QueryResult {
+                    columns: vec!["plan".into()],
+                    rows: vec![vec![Value::Text(fast)]],
+                    ..Default::default()
+                });
+            }
             let mut rows: Vec<Vec<Value>> = sources
                 .iter()
                 .zip(plans.iter())
@@ -1416,6 +1540,23 @@ impl DbTxn {
             None
         };
         let need_sort = !order_b.is_empty() && !plans.first().map_or(false, |p| p.ordered);
+
+        if let Some(result) = try_pk_bound_aggregate(
+            &mut self.txn,
+            st,
+            &sources,
+            &where_b,
+            &aggs,
+            &items,
+            &select_b,
+            &col_names,
+            &order_b,
+            offset,
+            limit,
+            has_window,
+        )? {
+            return Ok(result);
+        }
 
         // execute
         let mut out: Vec<(Vec<Value>, Vec<Value>)> = vec![]; // (sort keys, values)

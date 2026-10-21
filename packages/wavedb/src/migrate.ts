@@ -1,7 +1,15 @@
 // Schema diffing: compare the code-defined schema with what is stored in the catalog.
 
 import { encodeValue } from "./expr.ts";
-import { columnSpec, createTableStatement, defaultIndexName, tableMeta, type AnyTable, type ColumnKind } from "./schema.ts";
+import {
+  columnSpec,
+  createTableStatement,
+  defaultIndexName,
+  tableHasAutoIncrement,
+  tableMeta,
+  type AnyTable,
+  type ColumnKind,
+} from "./schema.ts";
 
 export interface TableDefJson {
   id: number;
@@ -21,6 +29,7 @@ export type SchemaOpKind =
   | "dropIndex"
   | "dropTable"
   | "rebuildTable"
+  | "setAutoIncrement"
   | "conflict";
 
 export interface SchemaOp {
@@ -152,6 +161,21 @@ export function diffSchema(
           statement: { kind: "dropIndex", name: h.name, table: m.name, ifExists: true },
         });
       }
+    }
+    const wantAi = tableHasAutoIncrement(t);
+    if (!needsRebuild && cur.autoIncrement !== wantAi) {
+      adds.push({
+        op: "setAutoIncrement",
+        table: m.name,
+        description: `${wantAi ? "enable" : "disable"} autoIncrement on ${m.name}`,
+        destructive: false,
+        applicable: true,
+        statement: {
+          kind: "alterTable",
+          table: m.name,
+          action: { op: "setAutoIncrement", enabled: wantAi },
+        },
+      });
     }
     for (const c of cur.columns) {
       if (needsRebuild) break;

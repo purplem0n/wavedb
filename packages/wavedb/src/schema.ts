@@ -114,6 +114,10 @@ export type Table<N extends string, C extends ColumnsDefinition> = {
 
 export type AnyTable = { readonly [TABLE_META]: TableMeta };
 
+export function tableHasAutoIncrement(t: AnyTable): boolean {
+  return tableMeta(t).columns.some((c) => c.config.autoIncrement);
+}
+
 export function tableMeta(t: AnyTable): TableMeta {
   return t[TABLE_META];
 }

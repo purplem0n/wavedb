@@ -170,6 +170,23 @@ fn order_limit_offset_distinct() {
 }
 
 #[test]
+fn max_min_pk_bound_fast_path() {
+    let (_d, db) = open_tmp();
+    q(
+        &db,
+        "CREATE TABLE things (id INTEGER PRIMARY KEY AUTOINCREMENT, v INT NOT NULL)",
+    );
+    for k in 1..=50_000 {
+        qp(&db, "INSERT INTO things (v) VALUES ($1)", &[i(k % 100)]);
+    }
+    assert_eq!(q(&db, "SELECT max(id) FROM things"), vec![vec![i(50_000)]]);
+    assert_eq!(q(&db, "SELECT min(id) FROM things"), vec![vec![i(1)]]);
+    let plan = q(&db, "EXPLAIN SELECT max(id) FROM things");
+    assert_eq!(plan[0][0], t("PK BOUND MAX(things.id)"));
+    assert_eq!(q(&db, "SELECT max(id) FROM things WHERE id > 1000"), vec![vec![i(50_000)]]);
+}
+
+#[test]
 fn aggregates_group_by_having() {
     let (_d, db) = open_tmp();
     setup_users(&db);

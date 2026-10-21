@@ -39,6 +39,13 @@ use std::sync::{Arc, Weak};
 
 const TS_LEN: usize = 8;
 const META_TS_KEY: &[u8] = b"last_ts";
+const META_AI_PREFIX: &[u8] = b"ai:";
+
+fn ai_meta_key(table_id: u32) -> Vec<u8> {
+    let mut k = META_AI_PREFIX.to_vec();
+    k.extend_from_slice(&table_id.to_be_bytes());
+    k
+}
 pub const FORMAT_VERSION: u32 = 1;
 
 /// How commits are made durable.
@@ -209,7 +216,16 @@ impl Engine {
         if let Some(c) = m.get(&id) {
             return Ok(c.clone());
         }
-        let c = Arc::new(AtomicI64::new(init()?));
+        let mut next = init()?;
+        if let Ok(Some(bytes)) = self.meta.get(&ai_meta_key(id)) {
+            if bytes.len() == 8 {
+                let stored = i64::from_be_bytes(bytes.as_slice().try_into().unwrap());
+                if stored > next {
+                    next = stored;
+                }
+            }
+        }
+        let c = Arc::new(AtomicI64::new(next));
         m.insert(id, c.clone());
         Ok(c)
     }
@@ -426,6 +442,16 @@ impl Engine {
 impl Drop for Engine {
     fn drop(&mut self) {
         if !self.opts.temporary {
+            let aux = self.aux.lock();
+            if !aux.is_empty() {
+                let mut batch = self.db.batch();
+                for (id, counter) in aux.iter() {
+                    let v = counter.load(Ordering::Relaxed);
+                    batch.insert(&self.meta, ai_meta_key(*id), v.to_be_bytes().to_vec());
+                }
+                let _ = batch.commit();
+            }
+            drop(aux);
             let _ = self.db.persist(PersistMode::SyncAll);
         }
     }

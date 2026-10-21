@@ -72,7 +72,7 @@ export const customers = table(
 export const orders = table(
   "orders",
   {
-    id: int().primaryKey(),
+    id: int().autoIncrement(),
     customerId: int("customer_id")
       .notNull()
       .references(() => customers.id)
@@ -88,7 +88,7 @@ export const orders = table(
 export const orderItems = table(
   "order_items",
   {
-    id: int().primaryKey(),
+    id: int().autoIncrement(),
     orderId: int("order_id")
       .notNull()
       .references(() => orders.id)
@@ -106,7 +106,7 @@ export const orderItems = table(
 export const productReviews = table(
   "product_reviews",
   {
-    id: int().primaryKey(),
+    id: int().autoIncrement(),
     productId: int("product_id")
       .notNull()
       .references(() => products.id)

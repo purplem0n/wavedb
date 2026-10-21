@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, asc, desc, eq, inArray, like, lte, max, gte } from "wavedb";
+import { and, asc, desc, eq, inArray, like, lte, gte } from "wavedb";
 import type { AppEnv } from "../db/context.ts";
 import { customers, orders, orderItems, productReviews, products, regions, sellers } from "../db/schema.ts";
 
@@ -108,15 +108,17 @@ catalog.post("/products/:id/reviews", async (c) => {
   try {
     let reviewId = 0;
     await db.tx(async (tx) => {
-      reviewId = ((await tx.select({ m: max(productReviews.id) }).from(productReviews))[0]?.m ?? 0) + 1;
-      await tx.insert(productReviews).values({
-        id: reviewId,
-        productId,
-        customerId: body.customerId,
-        rating: body.rating,
-        body: body.body.trim(),
-        createdAt: new Date(),
-      });
+      const r = await tx
+        .insert(productReviews)
+        .values({
+          productId,
+          customerId: body.customerId,
+          rating: body.rating,
+          body: body.body.trim(),
+          createdAt: new Date(),
+        })
+        .returning({ id: productReviews.id });
+      reviewId = r[0]!.id;
     });
     return c.json({ ok: true, id: reviewId }, 201);
   } catch {
@@ -161,30 +163,32 @@ catalog.post("/orders", async (c) => {
 
   let created: { id: number; ref: string; total: number } | undefined;
   await db.tx(async (tx) => {
-    const orderId = ((await tx.select({ m: max(orders.id) }).from(orders))[0]?.m ?? 0) + 1;
-    let nextItemId = ((await tx.select({ m: max(orderItems.id) }).from(orderItems))[0]?.m ?? 0) + 1;
-    const ref = `ORD-LIVE-${orderId}-${Date.now()}`;
     let total = 0;
-    const items = body.lines.map((line) => {
+    const lineRows = body.lines.map((line) => {
       const p = byId.get(line.productId)!;
       total += p.price * line.qty;
-      return {
-        id: nextItemId++,
+      return { productId: line.productId, qty: line.qty, unitPrice: p.price };
+    });
+    const inserted = await tx
+      .insert(orders)
+      .values({
+        customerId: body.customerId,
+        status: "pending",
+        total,
+        placedAt: new Date(),
+        ref: `ORD-LIVE-${Date.now()}`,
+      })
+      .returning({ id: orders.id, ref: orders.ref });
+    const orderId = inserted[0]!.id;
+    const ref = inserted[0]!.ref;
+    await tx.insert(orderItems).values(
+      lineRows.map((line) => ({
         orderId,
         productId: line.productId,
         qty: line.qty,
-        unitPrice: p.price,
-      };
-    });
-    await tx.insert(orders).values({
-      id: orderId,
-      customerId: body.customerId,
-      status: "pending",
-      total,
-      placedAt: new Date(),
-      ref,
-    });
-    await tx.insert(orderItems).values(items);
+        unitPrice: line.unitPrice,
+      })),
+    );
     for (const line of body.lines) {
       const p = byId.get(line.productId)!;
       await tx.update(products).set({ stock: p.stock - line.qty }).where(eq(products.id, line.productId));

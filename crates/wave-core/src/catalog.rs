@@ -329,6 +329,7 @@ pub enum AlterAction {
     DropColumn { name: String },
     RenameColumn { from: String, to: String },
     RenameTable { to: String },
+    SetAutoIncrement { enabled: bool },
 }
 
 fn valid_ident(n: &str) -> bool {
@@ -639,6 +640,24 @@ pub fn alter_table(txn: &mut Txn, name: &str, action: &AlterAction) -> Result<Ta
             }
             txn.delete(&catalog_key(name))?;
             t.name = to.clone();
+        }
+        AlterAction::SetAutoIncrement { enabled } => {
+            if *enabled {
+                if t.primary_key.len() != 1 {
+                    return Err(Error::Invalid(
+                        "autoIncrement requires a single-column primary key".into(),
+                    ));
+                }
+                let pk = t.col_pos(&t.primary_key[0]).ok_or_else(|| {
+                    Error::Invalid("primary key column missing".into())
+                })?;
+                if t.columns[pk].ty != ColumnType::Int {
+                    return Err(Error::Invalid(
+                        "autoIncrement requires an integer primary key".into(),
+                    ));
+                }
+            }
+            t.auto_increment = *enabled;
         }
     }
     t.version += 1;
