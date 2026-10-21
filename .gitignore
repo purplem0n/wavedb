@@ -1,0 +1,11 @@
+target/
+node_modules/
+dist/
+*.node
+data.wave/
+**/data.wave/
+.wave-tmp/
+.DS_Store
+bun.lock
+*.log
+.vite/
