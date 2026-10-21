@@ -37,15 +37,16 @@ function pct(sorted: number[], p: number) {
 }
 
 async function pickIds(db: MarketplaceDb) {
-  const [p, c, s] = await Promise.all([
-    db.query.products.count(),
-    db.query.customers.count(),
-    db.query.orders.count(),
-  ]);
+  const [row] = await db.sql<{ products: number; customers: number; orders: number }>`
+    SELECT
+      (SELECT max(id) FROM products) AS products,
+      (SELECT max(id) FROM customers) AS customers,
+      (SELECT max(id) FROM orders) AS orders
+  `;
   return {
-    products: p,
-    customers: c,
-    orders: s,
+    products: Number(row?.products ?? 0),
+    customers: Number(row?.customers ?? 0),
+    orders: Number(row?.orders ?? 0),
   };
 }
 
@@ -90,7 +91,7 @@ async function runInProcess(app: ReturnType<typeof createApp>, db: MarketplaceDb
           ok = r.status === 200;
         } else if (roll < 0.68) {
           route = "GET /api/analytics/top-sellers";
-          const r = await app.request("/api/analytics/top-sellers?limit=10");
+          const r = await app.request("/api/analytics/top-sellers?limit=10&since=2024-01-01");
           ok = r.status === 200;
         } else if (roll < 0.76) {
           const cid = rand(ids.customers);
@@ -161,7 +162,7 @@ async function runHttp() {
           ok = r.ok;
         } else if (roll < 0.75) {
           route = "GET /api/analytics/top-sellers";
-          const r = await fetch(`${baseUrl}/api/analytics/top-sellers`);
+          const r = await fetch(`${baseUrl}/api/analytics/top-sellers?since=2024-01-01`);
           ok = r.ok;
         } else {
           route = "PATCH /api/orders/:id/status";

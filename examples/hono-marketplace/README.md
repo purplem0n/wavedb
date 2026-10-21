@@ -38,9 +38,9 @@ SEED_PROFILE=full bun run seed:force    # wipe data/ and re-seed
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Row counts, WaveDB engine stats, `process.memoryUsage()` |
+| GET | `/health` | Engine stats + memory; row counts unless `?counts=0` |
 | GET | `/api/regions` | All regions |
-| GET | `/api/sellers` | Filter by `regionId`, `tier`; pagination |
+| GET | `/api/sellers` | Filter by `regionId`, `tier`; pagination (`includeTotal=1` for total count) |
 | GET | `/api/sellers/:id` | Seller + region |
 | GET | `/api/sellers/:id/products` | Seller catalog |
 | GET | `/api/products` | Filter `categoryId`, price range, `q` (title) |
@@ -50,7 +50,7 @@ SEED_PROFILE=full bun run seed:force    # wipe data/ and re-seed
 | POST | `/api/orders` | Create order (transaction: lines, stock, LTV) |
 | PATCH | `/api/orders/:id/status` | Update fulfillment status |
 | GET | `/api/analytics/sales-by-region` | Revenue by region since date |
-| GET | `/api/analytics/top-sellers` | Top sellers by revenue |
+| GET | `/api/analytics/top-sellers` | Top sellers by revenue (`since`, default `2024-01-01`) |
 | GET | `/api/analytics/category-performance` | Categories by product count |
 
 ## Stress test (2–5 minutes)

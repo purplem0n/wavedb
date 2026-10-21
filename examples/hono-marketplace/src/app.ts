@@ -22,10 +22,16 @@ export function createApp(db: MarketplaceDb) {
 
   app.get("/health", async (c) => {
     const stats = await db.stats();
-    const [products, orders] = await Promise.all([db.query.products.count(), db.query.orders.count()]);
+    const detail = c.req.query("counts") !== "0";
+    const counts = detail
+      ? await (async () => {
+          const [products, orders] = await Promise.all([db.query.products.count(), db.query.orders.count()]);
+          return { products, orders };
+        })()
+      : undefined;
     return c.json({
       ok: true,
-      counts: { products, orders },
+      ...(counts ? { counts } : {}),
       engine: stats,
       memory: process.memoryUsage(),
     });
