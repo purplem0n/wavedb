@@ -13,6 +13,7 @@ import {
   type OrderSpec,
 } from "./expr.ts";
 import { diffSchema, type SchemaOp, type TableDefJson } from "./migrate.ts";
+import { rebuildTable } from "./rebuild.ts";
 import {
   DeleteBuilder,
   InsertBuilder,
@@ -475,7 +476,14 @@ export class Database<S extends SchemaMap = SchemaMap> extends Querier<S> {
     }
     if (ops.length) {
       await this.tx(async (tx) => {
-        for (const op of ops) await tx.exec.run(op.statement!);
+        for (const op of ops) {
+          if (op.op === "rebuildTable") {
+            if (!op.rebuild) throw new WaveError("internal: rebuildTable missing payload", "WAVE_INVALID");
+            await rebuildTable(tx.exec, op.rebuild.table, op.rebuild.existing);
+          } else {
+            await tx.exec.run(op.statement!);
+          }
+        }
       });
     }
     return ops;

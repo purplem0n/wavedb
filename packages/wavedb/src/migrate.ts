@@ -20,6 +20,7 @@ export type SchemaOpKind =
   | "createIndex"
   | "dropIndex"
   | "dropTable"
+  | "rebuildTable"
   | "conflict";
 
 export interface SchemaOp {
@@ -31,6 +32,8 @@ export interface SchemaOp {
   /** `false` = cannot be applied automatically (e.g. changing a column type). */
   applicable: boolean;
   statement?: Record<string, unknown>;
+  /** Present when `op === "rebuildTable"`. */
+  rebuild?: { table: AnyTable; existing: TableDefJson };
 }
 
 const enc = (_k: ColumnKind, v: unknown) => encodeValue(v);
@@ -66,46 +69,49 @@ export function diffSchema(
     }
     const curCols = new Map(cur.columns.map((c) => [c.name, c]));
     const wantCols = new Set(m.columns.map((c) => c.name));
-    for (const c of m.columns) {
-      const have = curCols.get(c.name);
-      if (!have) {
-        const spec = columnSpec(c, enc);
-        const ok = spec.nullable || spec.default !== undefined;
-        adds.push({
-          op: "addColumn",
-          table: m.name,
-          description: `add column ${m.name}.${c.name} (${c.config.kind})`,
-          destructive: false,
-          applicable: ok && !c.config.primaryKey,
-          statement: { kind: "alterTable", table: m.name, action: { op: "addColumn", column: spec } },
-        });
-        if (!ok) {
+    let needsRebuild =
+      cur.primaryKey.join(",") !== m.primaryKey.join(",") ||
+      m.columns.some((c) => {
+        const have = curCols.get(c.name);
+        return have !== undefined && have.type !== c.config.kind;
+      });
+    if (needsRebuild) {
+      adds.push({
+        op: "rebuildTable",
+        table: m.name,
+        description: `rebuild table ${m.name} (column type and/or primary key changed)`,
+        destructive: true,
+        applicable: true,
+        rebuild: { table: t, existing: cur },
+      });
+    } else {
+      for (const c of m.columns) {
+        const have = curCols.get(c.name);
+        if (!have) {
+          const spec = columnSpec(c, enc);
+          const ok = spec.nullable || spec.default !== undefined;
           adds.push({
-            op: "conflict",
+            op: "addColumn",
             table: m.name,
-            description: `column ${m.name}.${c.name} is NOT NULL without a default; add .default(...) or make it nullable`,
+            description: `add column ${m.name}.${c.name} (${c.config.kind})`,
             destructive: false,
-            applicable: false,
+            applicable: ok && !c.config.primaryKey,
+            statement: { kind: "alterTable", table: m.name, action: { op: "addColumn", column: spec } },
           });
+          if (!ok) {
+            adds.push({
+              op: "conflict",
+              table: m.name,
+              description: `column ${m.name}.${c.name} is NOT NULL without a default; add .default(...) or make it nullable`,
+              destructive: false,
+              applicable: false,
+            });
+          }
         }
-      } else if (have.type !== c.config.kind) {
-        adds.push({
-          op: "conflict",
-          table: m.name,
-          description: `column ${m.name}.${c.name} has type ${have.type} in the database but ${c.config.kind} in the schema (type changes are not automatic)`,
-          destructive: false,
-          applicable: false,
-        });
       }
     }
-    if (cur.primaryKey.join(",") !== m.primaryKey.join(",")) {
-      adds.push({
-        op: "conflict",
-        table: m.name,
-        description: `primary key of ${m.name} differs (db: ${cur.primaryKey.join(",")}; schema: ${m.primaryKey.join(",")})`,
-        destructive: false,
-        applicable: false,
-      });
+    if (needsRebuild) {
+      continue;
     }
     // indexes
     const wantIdx = new Map<string, { name: string; columns: string[]; unique: boolean }>();
@@ -148,6 +154,7 @@ export function diffSchema(
       }
     }
     for (const c of cur.columns) {
+      if (needsRebuild) break;
       if (!wantCols.has(c.name)) {
         dropCols.push({
           op: "dropColumn",
