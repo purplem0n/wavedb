@@ -1,0 +1,177 @@
+//! Statement IR shared by the SQL front-end and the TypeScript query builder.
+
+use crate::catalog::{AlterAction, IndexSpec, TableSpec};
+use crate::expr::Expr;
+use crate::value::Value;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TableRef {
+    pub name: String,
+    #[serde(default)]
+    pub alias: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum JoinKind {
+    #[default]
+    Inner,
+    Left,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Join {
+    #[serde(default)]
+    pub kind: JoinKind,
+    pub table: TableRef,
+    pub on: Expr,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "camelCase")]
+pub enum SelectItem {
+    Star {
+        #[serde(default)]
+        table: Option<String>,
+    },
+    Expr {
+        expr: Expr,
+        #[serde(default)]
+        alias: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OrderItem {
+    pub expr: Expr,
+    #[serde(default)]
+    pub desc: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectStmt {
+    #[serde(default)]
+    pub from: Option<TableRef>,
+    #[serde(default)]
+    pub joins: Vec<Join>,
+    #[serde(default)]
+    pub columns: Vec<SelectItem>,
+    #[serde(default, rename = "where")]
+    pub where_: Option<Expr>,
+    #[serde(default)]
+    pub group_by: Vec<Expr>,
+    #[serde(default)]
+    pub having: Option<Expr>,
+    #[serde(default)]
+    pub order_by: Vec<OrderItem>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub offset: Option<i64>,
+    #[serde(default)]
+    pub distinct: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Assign {
+    pub column: String,
+    pub expr: Expr,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ConflictAction {
+    DoNothing,
+    DoUpdate { set: Vec<Assign> },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OnConflict {
+    #[serde(default)]
+    pub target: Vec<String>,
+    #[serde(flatten)]
+    pub action: ConflictAction,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsertStmt {
+    pub table: String,
+    #[serde(default)]
+    pub columns: Option<Vec<String>>,
+    pub rows: Vec<Vec<Expr>>,
+    #[serde(default)]
+    pub on_conflict: Option<OnConflict>,
+    #[serde(default)]
+    pub returning: Option<Vec<SelectItem>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateStmt {
+    pub table: String,
+    pub set: Vec<Assign>,
+    #[serde(default, rename = "where")]
+    pub where_: Option<Expr>,
+    #[serde(default)]
+    pub returning: Option<Vec<SelectItem>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeleteStmt {
+    pub table: String,
+    #[serde(default, rename = "where")]
+    pub where_: Option<Expr>,
+    #[serde(default)]
+    pub returning: Option<Vec<SelectItem>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Statement {
+    Select(SelectStmt),
+    Insert(InsertStmt),
+    Update(UpdateStmt),
+    Delete(DeleteStmt),
+    CreateTable(TableSpec),
+    #[serde(rename_all = "camelCase")]
+    DropTable {
+        name: String,
+        #[serde(default)]
+        if_exists: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    CreateIndex {
+        table: String,
+        #[serde(flatten)]
+        index: IndexSpec,
+        #[serde(default)]
+        if_not_exists: bool,
+    },
+    #[serde(rename_all = "camelCase")]
+    DropIndex {
+        name: String,
+        #[serde(default)]
+        table: Option<String>,
+        #[serde(default)]
+        if_exists: bool,
+    },
+    AlterTable {
+        table: String,
+        action: AlterAction,
+    },
+    Explain {
+        stmt: Box<Statement>,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<Value>>,
+    pub rows_affected: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_insert_id: Option<Value>,
+}

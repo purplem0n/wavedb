@@ -34,7 +34,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::iter::Peekable;
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 const TS_LEN: usize = 8;
@@ -124,6 +124,7 @@ pub struct Engine {
     sync: Mutex<SyncState>,
     sync_cv: Condvar,
     counters: Counters,
+    aux: Mutex<HashMap<u32, Arc<AtomicI64>>>,
 }
 
 static REGISTRY: Mutex<Option<HashMap<PathBuf, Weak<Engine>>>> = Mutex::new(None);
@@ -173,6 +174,7 @@ impl Engine {
             sync: Mutex::new(SyncState::default()),
             sync_cv: Condvar::new(),
             counters: Counters::default(),
+            aux: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -192,6 +194,21 @@ impl Engine {
         let e = Engine::open(&canon, opts)?;
         map.insert(canon, Arc::downgrade(&e));
         Ok(e)
+    }
+
+    /// Named in-memory counter (used for auto-increment ids). `init` runs once.
+    pub fn aux_counter(
+        &self,
+        id: u32,
+        init: impl FnOnce() -> Result<i64>,
+    ) -> Result<Arc<AtomicI64>> {
+        let mut m = self.aux.lock();
+        if let Some(c) = m.get(&id) {
+            return Ok(c.clone());
+        }
+        let c = Arc::new(AtomicI64::new(init()?));
+        m.insert(id, c.clone());
+        Ok(c)
     }
 
     pub fn path(&self) -> &Path {
