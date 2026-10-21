@@ -221,10 +221,12 @@ export interface ColumnSpecJson {
   unique: boolean;
   primaryKey: boolean;
   autoIncrement: boolean;
+  references?: { table: string; columns: string[] };
 }
 
 export function columnSpec(c: TableMeta["columns"][number], encode: (kind: ColumnKind, v: unknown) => unknown): ColumnSpecJson {
   const d = c.config.default;
+  const ref = c.config.references?.();
   return {
     name: c.name,
     type: c.config.kind,
@@ -233,6 +235,7 @@ export function columnSpec(c: TableMeta["columns"][number], encode: (kind: Colum
     primaryKey: false, // composite-aware: PK is passed at table level
     autoIncrement: c.config.autoIncrement,
     ...(d ? { default: d.kind === "value" ? { kind: "value" as const, v: encode(c.config.kind, d.v) } : d } : {}),
+    ...(ref ? { references: { table: ref.table, columns: [ref.name] } } : {}),
   };
 }
 

@@ -910,10 +910,13 @@ mod tests {
     #[test]
     fn union_all_keeps_duplicates() {
         let (_d, db) = open_tmp();
-        q(&db, "CREATE TABLE t (v INT)");
-        q(&db, "INSERT INTO t VALUES (1),(2),(1)");
+        q(&db, "CREATE TABLE t (id INT PRIMARY KEY, v INT)");
+        q(&db, "INSERT INTO t VALUES (1,1),(2,2)");
         assert_eq!(
-            q(&db, "SELECT v FROM t WHERE v = 1 UNION ALL SELECT v FROM t WHERE v = 1"),
+            q(
+                &db,
+                "SELECT v FROM t WHERE id = 1 UNION ALL SELECT v FROM t WHERE id = 1"
+            ),
             vec![vec![Value::Int(1)], vec![Value::Int(1)]]
         );
     }
@@ -921,8 +924,8 @@ mod tests {
     #[test]
     fn window_row_number_partition() {
         let (_d, db) = open_tmp();
-        q(&db, "CREATE TABLE w (g INT, v INT)");
-        q(&db, "INSERT INTO w VALUES (1,10),(1,20),(2,5),(2,15)");
+        q(&db, "CREATE TABLE w (id INT PRIMARY KEY, g INT, v INT)");
+        q(&db, "INSERT INTO w VALUES (1,1,10),(2,1,20),(3,2,5),(4,2,15)");
         assert_eq!(
             q(
                 &db,
@@ -940,8 +943,8 @@ mod tests {
     #[test]
     fn union_empty_side() {
         let (_d, db) = open_tmp();
-        q(&db, "CREATE TABLE e (v INT)");
-        q(&db, "INSERT INTO e VALUES (7)");
+        q(&db, "CREATE TABLE e (id INT PRIMARY KEY, v INT)");
+        q(&db, "INSERT INTO e VALUES (1,7)");
         assert_eq!(
             q(
                 &db,
@@ -961,7 +964,7 @@ mod tests {
     #[test]
     fn rejects_invalid_union_and_window_syntax() {
         assert!(parse_sql("SELECT 1 UNION", &[]).is_err());
-        assert!(parse_sql("SELECT sum(x) OVER () FROM t", &[]).is_err());
+        assert!(parse_sql("SELECT row_number(1) OVER (ORDER BY 1)", &[]).is_err());
         let s = parse_sql("SELECT row_number() OVER (ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM t", &[]);
         assert!(s.is_err());
     }
