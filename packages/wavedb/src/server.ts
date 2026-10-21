@@ -3,7 +3,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, join, normalize, resolve, sep } from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { WaveError, mapNativeError } from "./errors.ts";
 import type { Database, TxBackend } from "./db.ts";
@@ -151,7 +151,7 @@ export async function serve(db: Database<any>, opts: ServeOptions = {}): Promise
     }
     let rel = normalize(decodeURIComponent(urlPath)).replace(/^([/\\])+/, "");
     let file = join(staticDir, rel);
-    if (!file.startsWith(staticDir)) {
+    if (file !== staticDir && !file.startsWith(staticDir + sep)) {
       res.writeHead(403);
       return res.end();
     }

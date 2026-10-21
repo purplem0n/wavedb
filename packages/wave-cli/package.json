@@ -1,0 +1,16 @@
+{
+  "name": "wave-cli",
+  "version": "0.1.0",
+  "description": "The `wave` command line: studio, serve, sql, schema push/diff, export/import",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "wave": "./dist/main.js" },
+  "files": ["dist", "studio"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test test"
+  },
+  "dependencies": { "wavedb": "workspace:*" },
+  "engines": { "node": ">=20" }
+}
