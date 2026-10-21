@@ -2,18 +2,22 @@
   "name": "wavedb-monorepo",
   "private": true,
   "version": "0.1.0",
-  "description": "WaveDB — a concurrent-write embedded relational database for TypeScript (Node + Bun)",
-  "workspaces": ["packages/*"],
+  "description": "WaveDB \u2014 a concurrent-write embedded relational database for TypeScript (Node + Bun)",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "build:native": "node scripts/build-native.mjs",
     "build:native:debug": "node scripts/build-native.mjs --debug",
-    "build": "bun run build:native && bun run --filter wavedb build && bun run --filter wave-studio build",
-    "test": "bun run test:rust && bun run test:ts && bun run test:node",
+    "build": "bun run build:native && tsc -p packages/wavedb/tsconfig.build.json && tsc -p packages/wave-cli/tsconfig.build.json && bun run test:studio",
+    "test": "bun run test:rust && bun run test:ts && bun run test:studio && bun run test:node",
     "test:rust": "cargo test --workspace",
     "test:ts": "bun run build:native && bun test packages/wavedb/test packages/wave-cli/test",
     "test:node": "node scripts/node-smoke.mjs",
     "bench": "bun run build:native && bun tools/bench/bench.ts",
-    "studio": "bun packages/wave-cli/src/main.ts studio"
+    "studio": "bun packages/wave-cli/src/main.ts studio",
+    "test:studio": "cd packages/wave-studio && ../../node_modules/.bin/tsc --noEmit && bunx vite build",
+    "typecheck": "tsc -p packages/wavedb/tsconfig.json --noEmit && tsc -p packages/wave-cli/tsconfig.json --noEmit && tsc -p packages/wave-studio/tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@types/bun": "latest",

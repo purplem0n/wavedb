@@ -11,3 +11,4 @@ bun.lock
 .vite/
 demo.wave/
 demo.wave/
+tools/bench/results.quick.json
