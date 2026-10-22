@@ -21,7 +21,7 @@
     "studio": "bun packages/wave-cli/src/main.ts studio",
     "test:studio": "cd packages/wave-studio && ../../node_modules/.bin/tsc --noEmit && bunx vite build",
     "typecheck": "tsc -p packages/wavedb/tsconfig.json --noEmit && tsc -p packages/wave-cli/tsconfig.json --noEmit && tsc -p packages/wave-studio/tsconfig.json --noEmit",
-    "publish:npm": "node scripts/copy-studio.mjs && node scripts/publish-npm.mjs"
+    "release:bump": "node scripts/bump-version.mjs"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2.18.4",

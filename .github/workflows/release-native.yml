@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm trusted publishing (OIDC) — no long-lived NPM_TOKEN
 
 jobs:
   build:
@@ -67,37 +66,3 @@ jobs:
         with:
           files: release-assets/*
           generate_release_notes: true
-
-  publish-npm:
-    needs: build
-    runs-on: ubuntu-latest
-    continue-on-error: true # GitHub Release is the prod fallback; npm may fail (OIDC, suspension, etc.)
-    # GitHub-hosted runners only (required for OIDC trusted publishing)
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          registry-url: https://registry.npmjs.org
-      - name: npm CLI (trusted publishing requires ≥11.5.1)
-        run: npm install -g npm@11
-      - run: bun install
-        env:
-          WAVE_SKIP_NATIVE_DOWNLOAD: "1"
-      - uses: actions/download-artifact@v4
-        with:
-          path: native-artifacts
-      - name: Merge native artifacts into packages
-        run: |
-          set -euo pipefail
-          for pkg in wavedb-darwin-arm64 wavedb-linux-arm64 wavedb-linux-x64 wavedb-win32-x64; do
-            if [ -d "native-artifacts/${pkg}" ]; then
-              mkdir -p "packages/${pkg}"
-              cp -R "native-artifacts/${pkg}/." "packages/${pkg}/"
-            fi
-          done
-          ls -la packages/wavedb-linux-x64 || true
-      - run: tsc -p packages/wavedb/tsconfig.build.json && tsc -p packages/wave-cli/tsconfig.build.json
-      - run: node scripts/copy-studio.mjs
-      - run: node scripts/publish-npm.mjs

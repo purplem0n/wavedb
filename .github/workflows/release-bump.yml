@@ -1,0 +1,77 @@
+name: Release bump
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Manual bump (major for 1.0-style releases; minor optional). Auto CI uses patch only."
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+concurrency:
+  group: release-bump
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Gate (skip release commits)
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            msg=$(git log -1 --format=%s "${{ github.event.workflow_run.head_sha }}")
+            if echo "$msg" | grep -q 'chore(release):'; then
+              echo "proceed=false" >> "$GITHUB_OUTPUT"
+              echo "Skipping bump for release commit"
+              exit 0
+            fi
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.gate.outputs.proceed == 'true'
+
+      - name: Bump version
+        if: steps.gate.outputs.proceed == 'true'
+        id: bump
+        env:
+          BUMP: ${{ github.event_name == 'workflow_dispatch' && inputs.bump || 'patch' }}
+        run: node scripts/bump-version.mjs
+
+      - name: Commit, tag, and push
+        if: steps.gate.outputs.proceed == 'true'
+        run: |
+          set -euo pipefail
+          v="${{ steps.bump.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json packages/*/package.json
+          git commit -m "chore(release): v${v} [skip ci]"
+          git tag "v${v}"
+          git push origin main
+          git push origin "v${v}"
