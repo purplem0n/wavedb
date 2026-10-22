@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, quote, type QueryResult, type TableDef } from "./api";
+import { api, engineQueryDurationMs, quote, type QueryResult, type TableDef } from "./api";
 import { DataGrid } from "./DataGrid";
 import { RefreshIcon } from "./icons";
 
@@ -25,7 +25,6 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
 
   const load = useCallback(async () => {
     setLoading(true);
-    const t0 = performance.now();
     try {
       const where = applied.trim() ? ` WHERE ${applied}` : "";
       const order = sort ? ` ORDER BY ${quote(sort.column)} ${sort.desc ? "DESC" : "ASC"}` : "";
@@ -35,7 +34,7 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
       ]);
       setResult(rows);
       setTotal(Number(count.rows[0]?.[0] ?? 0));
-      setQueryMs(performance.now() - t0);
+      setQueryMs(engineQueryDurationMs(rows, count));
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -150,7 +149,7 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
               {queryMs !== null && (
                 <>
                   {" "}
-                  • Query duration: <span className="accent">{queryMs.toFixed(1)}ms</span>
+                  • Engine query: <span className="accent">{queryMs.toFixed(2)}ms</span>
                 </>
               )}
             </>

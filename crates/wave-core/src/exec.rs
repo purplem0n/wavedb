@@ -1135,6 +1135,11 @@ impl DbTxn {
     }
 
     pub fn execute(&mut self, stmt: &Statement) -> Result<QueryResult> {
+        let started = std::time::Instant::now();
+        Ok(self.execute_stmt(stmt)?.with_duration(started))
+    }
+
+    fn execute_stmt(&mut self, stmt: &Statement) -> Result<QueryResult> {
         match stmt {
             Statement::Select(s) => self.exec_select(s, false),
             Statement::Insert(s) => self.exec_insert(s),
@@ -2048,6 +2053,7 @@ impl DbTxn {
             rows,
             rows_affected: affected,
             last_insert_id: last_id,
+            ..Default::default()
         })
     }
 
@@ -2102,6 +2108,7 @@ impl DbTxn {
             rows,
             rows_affected: updated.len() as u64,
             last_insert_id: None,
+            ..Default::default()
         })
     }
 
@@ -2117,6 +2124,7 @@ impl DbTxn {
             rows: out,
             rows_affected: rows.len() as u64,
             last_insert_id: None,
+            ..Default::default()
         })
     }
 }

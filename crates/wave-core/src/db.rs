@@ -130,16 +130,18 @@ impl Db {
 
     /// Execute one statement in its own transaction (auto-retried on conflict).
     pub fn execute(&self, stmt: &Statement) -> Result<QueryResult> {
-        self.run_statement(stmt)
+        let started = std::time::Instant::now();
+        Ok(self.run_statement(stmt)?.with_duration(started))
     }
 
     pub fn execute_sql(&self, sql: &str, params: &[crate::value::Value]) -> Result<QueryResult> {
+        let started = std::time::Instant::now();
         let stmts = crate::sql::parse_sql(sql, params)?;
         let mut last = QueryResult::default();
         for s in &stmts {
             last = self.run_statement(s)?;
         }
-        Ok(last)
+        Ok(last.with_duration(started))
     }
 
     pub fn tables(&self) -> Result<Vec<TableDef>> {
@@ -149,11 +151,12 @@ impl Db {
 
 impl DbTxn {
     pub fn execute_all(&mut self, stmts: &[Statement]) -> Result<QueryResult> {
+        let started = std::time::Instant::now();
         let mut last = QueryResult::default();
         for s in stmts {
             last = self.execute(s)?;
         }
-        Ok(last)
+        Ok(last.with_duration(started))
     }
 
     pub fn execute_sql(&mut self, sql: &str, params: &[crate::value::Value]) -> Result<QueryResult> {

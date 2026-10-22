@@ -41,6 +41,8 @@ export interface RawResult {
   rows: unknown[][];
   rowsAffected: number;
   lastInsertId?: unknown;
+  /** Engine execution time (ms), from the native layer. */
+  durationMs?: number;
 }
 
 export interface Executor {

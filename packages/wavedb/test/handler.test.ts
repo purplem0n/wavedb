@@ -47,6 +47,18 @@ describe("createWaveHandler", () => {
     expect(tables.status).toBe(200);
     expect((await tables.json()).map((t: { name: string }) => t.name)).toEqual(["items"]);
 
+    const run = await handler.fetch(
+      new Request(`${base}/wave/api/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${loginJson.token}` },
+        body: JSON.stringify({ sql: "SELECT count(*) AS n FROM items" }),
+      }),
+    );
+    expect(run.status).toBe(200);
+    const runJson = (await run.json()) as { durationMs?: number };
+    expect(typeof runJson.durationMs).toBe("number");
+    expect(runJson.durationMs!).toBeGreaterThanOrEqual(0);
+
     const redirect = await handler.fetch(new Request(`${base}/studio`));
     expect(redirect.status).toBe(308);
     expect(new URL(redirect.headers.get("location")!).pathname).toBe("/studio/");

@@ -42,6 +42,17 @@ export interface QueryResult {
   rows: unknown[][];
   rowsAffected: number;
   lastInsertId?: unknown;
+  /** Engine execution time (ms), from `/api/run`. */
+  durationMs?: number;
+}
+
+/** Longest engine time when multiple queries ran in parallel (e.g. page + count). */
+export function engineQueryDurationMs(...results: Array<Pick<QueryResult, "durationMs"> | undefined>): number | null {
+  const ms = results
+    .map((r) => r?.durationMs)
+    .filter((n): n is number => n !== undefined && Number.isFinite(n));
+  if (ms.length === 0) return null;
+  return Math.max(...ms);
 }
 
 export class ApiError extends Error {

@@ -45,12 +45,11 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
     const sql = text.trim();
     if (!sql) return;
     setRunning(true);
-    const t0 = performance.now();
     try {
       const r = await api.sql(sql);
       setResult(r);
       setError(null);
-      setMs(performance.now() - t0);
+      setMs(r.durationMs ?? null);
       const next = [sql, ...history.filter((h) => h !== sql)].slice(0, 30);
       setHistory(next);
       localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
@@ -168,7 +167,7 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
               <>
                 <span className="run-meta-dot" />
                 <span>
-                  Query executed in {ms.toFixed(1)}ms • {result.rows.length} row{result.rows.length === 1 ? "" : "s"} returned
+                  Engine query {ms.toFixed(2)}ms • {result.rows.length} row{result.rows.length === 1 ? "" : "s"} returned
                 </span>
               </>
             )}

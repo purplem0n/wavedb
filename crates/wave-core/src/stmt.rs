@@ -213,4 +213,14 @@ pub struct QueryResult {
     pub rows_affected: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_insert_id: Option<Value>,
+    /// Wall time spent executing this statement (ms), excluding JSON/API overhead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<f64>,
+}
+
+impl QueryResult {
+    pub fn with_duration(mut self, started: std::time::Instant) -> Self {
+        self.duration_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+        self
+    }
 }
