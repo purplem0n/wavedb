@@ -1,5 +1,6 @@
 // Database / Transaction objects built on a pluggable Backend (native addon or HTTP).
 
+import { resolve } from "node:path";
 import { ClosedError, ConflictError, WaveError, mapNativeError } from "./errors.ts";
 import {
   Condition,
@@ -415,13 +416,17 @@ export interface PushOptions {
 
 export class Database<S extends SchemaMap = SchemaMap> extends Querier<S> {
   readonly exec: Executor;
+  /** Local directory when opened via `wave()` (used by `waveHost` for auth / leader). */
+  readonly dataPath?: string;
   private closed = false;
   constructor(
     readonly backend: Backend,
     schema: S,
+    meta?: { dataPath?: string },
   ) {
     super(schema);
     this.exec = backend.exec;
+    this.dataPath = meta?.dataPath;
   }
 
   /** Start a manual transaction (remember to commit or rollback). */
@@ -588,6 +593,8 @@ export class Database<S extends SchemaMap = SchemaMap> extends Querier<S> {
 // ---------------------------------------------------------------------------
 
 export interface OpenOptions<S extends SchemaMap> {
+  /** On-disk directory (default `WAVE_DB_PATH` or `./data.wave`). Use with `wave({ schema, path })`. */
+  path?: string;
   schema?: S;
   /** `sync` (default): fsync before commit returns. `async`: faster, may lose the last few ms on power loss. */
   durability?: Durability;
@@ -599,19 +606,41 @@ export interface OpenOptions<S extends SchemaMap> {
   push?: boolean | PushOptions;
 }
 
-/** Open (or create) a database directory, e.g. `wave("./data.wave", { schema })`. */
-export async function wave<S extends SchemaMap = {}>(path = "./data.wave", opts: OpenOptions<S> = {}): Promise<Database<S>> {
+/** Default on-disk path: `WAVE_DB_PATH` or `./data.wave`. */
+export function defaultWavePath(): string {
+  return process.env.WAVE_DB_PATH?.trim() || "./data.wave";
+}
+
+/** Open (or create) a database directory. Prefer `wave({ schema })`; path defaults from env. */
+export async function wave<S extends SchemaMap = {}>(opts?: OpenOptions<S>): Promise<Database<S>>;
+export async function wave<S extends SchemaMap = {}>(path: string, opts?: OpenOptions<S>): Promise<Database<S>>;
+export async function wave<S extends SchemaMap = {}>(
+  pathOrOpts?: string | OpenOptions<S>,
+  maybeOpts: OpenOptions<S> = {},
+): Promise<Database<S>> {
+  let opts: OpenOptions<S>;
+  let pathArg: string | undefined;
+  if (typeof pathOrOpts === "string") {
+    pathArg = pathOrOpts;
+    opts = maybeOpts ?? {};
+  } else {
+    opts = pathOrOpts ?? {};
+    pathArg = opts.path;
+  }
+  const resolved = resolve(pathArg ?? defaultWavePath());
+  const durability =
+    opts.durability ?? (process.env.WAVE_DURABILITY === "async" ? ("async" as const) : undefined);
   const native = loadNative();
   let handle: NativeDb;
   try {
     handle = native.NativeDb.open(
-      path,
-      JSON.stringify({ durability: opts.durability, cacheMb: opts.cacheMb, temporary: opts.temporary }),
+      resolved,
+      JSON.stringify({ durability, cacheMb: opts.cacheMb, temporary: opts.temporary }),
     );
   } catch (e) {
     throw mapNativeError(e);
   }
-  const db = new Database<S>(new NativeBackend(handle), (opts.schema ?? {}) as S);
+  const db = new Database<S>(new NativeBackend(handle), (opts.schema ?? {}) as S, { dataPath: resolved });
   const doPush = opts.push ?? Object.keys(db.schema).length > 0;
   if (doPush) {
     try {

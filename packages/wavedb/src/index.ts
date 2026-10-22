@@ -47,6 +47,7 @@ export * from "./errors.ts";
 export { sql, SqlFragment } from "./sql.ts";
 export {
   wave,
+  defaultWavePath,
   Database,
   Tx,
   Querier,

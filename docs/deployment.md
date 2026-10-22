@@ -57,28 +57,36 @@ Pin `WAVEDB_VERSION` to a tag that exists on [Releases](https://github.com/purpl
 | Pattern | Use when |
 |--------|----------|
 | **Embedded** | One app process owns the DB: `await wave("/data/app.wave", { schema, durability: "sync" })` |
-| **Embedded + Studio** | Same process: `app.use(waveHost(db, { dataPath }).hono())` ([example](../examples/hono-marketplace)). Prebuilt Studio ships inside `@purplemon/wavedb` (`studio/`); no separate frontend build in your app. |
+| **Embedded + Studio** | Same process: `app.use(waveHost(db).hono())` ([example](../examples/hono-marketplace)). Prebuilt Studio ships inside `@purplemon/wavedb` (`studio/`); no separate frontend build in your app. |
 | **Sidecar `serve`** | Multiple workers / languages: one `wave serve` opens files; others use `connect("http://127.0.0.1:4401", { token })` |
 | **Remote + failover** | `connect(primaryUrl, { urls: [primary, standby], token })` probes `/api/health` |
 
-Environment conventions:
+Environment variables (embedded `wave({ schema })` + `waveHost(db)`):
 
-- `WAVE_PATH` — database directory
-- `WAVE_URL` — HTTP base when the DB is already open (e.g. `http://127.0.0.1:3000/__wave`); used by `wave` CLI `--url`
-- `WAVE_SERVE_TOKEN` — static bearer for machine clients (`connect`, `--token`)
-- `WAVE_ADMIN_PASSWORD` — bootstrap superuser on first start (optional; otherwise use Studio setup)
-- `WAVE_SESSION_SECRET` — override session signing (optional; default writes `data.wave/.wave/session.key`)
-- `WAVE_DURABILITY=sync|async`
+| Variable | Required? | Purpose |
+|----------|-----------|---------|
+| `WAVE_DB_PATH` | **Recommended** on production hosts with a persistent volume (default `./data.wave`) | Database directory for `wave()` / auth / leader files |
+| `WAVE_DURABILITY` | Optional (default `sync`) | `sync` or `async` |
+| `WAVE_ADMIN_PASSWORD` | Optional | Bootstrap superuser before first HTTP request (else Studio setup) |
+| `WAVE_SERVE_TOKEN` | Optional for browser Studio; **required** for token-only automation (`connect`, `wave --url --token`) | Bearer for `/api/*` |
+| `WAVE_LEADER` | Optional | `1` enables leader lease on `waveHost()` / `wave serve --leader` |
+| `WAVE_STANDBY` | Optional | `1` with leader: standby until lease acquired |
+| `WAVE_TRUST_PROXY` | Optional | `1` when a trusted proxy sets `X-Forwarded-Proto: https` |
+| `WAVE_SESSION_SECRET` | Optional | Fixed session signing secret (default: file under `.wave/`) |
+| `WAVE_URL` | Optional (CLI remote mode) | Base URL when the DB is already served (e.g. `http://127.0.0.1:3000/__wave`) |
+| `WAVE_STUDIO_DIR` | Optional | Path to built Studio static files if not bundled in the package |
+
+Install / native addon (see table above in this doc): `WAVE_NATIVE_REQUIRED`, `WAVE_SKIP_NATIVE_DOWNLOAD`, `WAVE_NATIVE_VERSION`, `WAVE_NATIVE_GITHUB_REPO`, `WAVE_NATIVE_PATH`, `WAVE_NATIVE_SHA256` — all optional unless you enforce verified downloads in CI.
 
 ### Superuser auth
 
-When `dataPath` is set on `serve()` / `createWaveHandler()`, Wave enables superuser auth for **Studio and `/api/*` only** (not your app’s in-process queries). First visit: create a password in Studio, or set `WAVE_ADMIN_PASSWORD` before boot. Sessions are httpOnly cookies; automation can use `WAVE_SERVE_TOKEN` or a session token from `POST /api/auth/login`.
+When `dataPath` is set on `serve()` / `createWaveHandler()`, Wave enables superuser auth for **Studio and `/api/*` only** (not your app’s in-process queries). First visit: create a password in Studio, or set `WAVE_ADMIN_PASSWORD` before boot. Browser / Studio sessions use an **HttpOnly cookie** (`wave_session`, `Path` = your API prefix, e.g. `/__wave/api`). `POST /api/auth/login` returns `{ "ok": true }` only — the session is in `Set-Cookie`, not JSON. Automation: set **`WAVE_SERVE_TOKEN`** (or `--token` on `wave serve` / `connect`) for `Authorization: Bearer`. CLI: `wave sql --url … --password` caches the cookie under `.wave/`. Optional: `WAVE_TRUST_PROXY=1` for `Secure` cookies behind TLS-terminating proxies.
 
 ## Platforms
 
 | Host | Viable | Notes |
 |------|--------|--------|
-| **Fly.io** | Yes | `[mounts]` volume; scale writer to 1; health check `/api/health` |
+| **Fly.io** | Yes | `[mounts]` volume; scale writer to 1; health check `GET /__wave/api/health` (embedded) or `/api/health` (`wave serve`); expect `{ ok, standby, expiresAt }` |
 | **VPS / Docker** | Yes | Bind-mount volume; systemd or compose; backup `data.wave` |
 | **Render** | Yes | Persistent disk on a Web Service (not static site) |
 | **Heroku** | Caveats | Ephemeral dyno disk is **not** suitable; use Fly/Render/VPS or mounted storage |
@@ -97,9 +105,10 @@ Use a **hosted WaveDB** (Fly, Render, VPS) and call **`connect()`** from edge fr
 ## High availability
 
 - Only **one process** may open `data.wave` (fjall directory lock).
-- `serve(db, { dataPath, leader: true })` uses a **leader lease** at `dataPath/.wave/leader.json`.
-- Standby: `serve(db, { dataPath, leader: true, standby: true })` serves `/api/health` with 503 until it becomes leader.
-- Clients: `connect(url, { urls: [...] })` for simple failover.
+- **`wave serve` does not enable leader election unless you pass `--leader`** (or `serve(..., { leader: true })`). Use that when multiple nodes share a volume.
+- Leader lease file: `dataPath/.wave/leader.json` (mode `0600`, no bearer token stored).
+- Standby: `--leader --standby` (or `standby: true`) — `/api/health` returns 503 on `/api/run` until this node holds the lease.
+- Clients: `connect(url, { urls: [...], token: process.env.WAVE_SERVE_TOKEN })` for simple failover.
 
 ## Backups
 

@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Context, MiddlewareHandler, Next } from "hono";
 import type { Database } from "./db.ts";
+import { defaultWavePath } from "./db.ts";
 import { normalizePrefix } from "./auth.ts";
 import { createWaveHandler, waveMiddleware, type HandlerOptions, type WaveHandler } from "./server.ts";
 
@@ -50,18 +51,33 @@ function connectPathFromApiPrefix(apiPrefix: string): string {
   return p;
 }
 
+function resolveEmbedHandlerOptions(db: Database<any>, opts: WaveHostOptions): HandlerOptions {
+  const dataPathRaw = opts.dataPath ?? db.dataPath ?? (process.env.WAVE_DB_PATH ? defaultWavePath() : undefined);
+  const dataPath = dataPathRaw ? resolve(dataPathRaw) : undefined;
+  const token = opts.token ?? process.env.WAVE_SERVE_TOKEN;
+  const leader = opts.leader ?? process.env.WAVE_LEADER === "1";
+  const standby = opts.standby ?? process.env.WAVE_STANDBY === "1";
+  return {
+    ...opts,
+    dataPath,
+    token,
+    leader,
+    standby,
+    auth: opts.auth ?? !!dataPath,
+  };
+}
+
 /** Mount Wave Studio + HTTP API on an existing server (minimal Hono/Bun integration). */
-export function waveHost(db: Database<any>, opts: WaveHostOptions): WaveHost {
+export function waveHost(db: Database<any>, opts: WaveHostOptions = {}): WaveHost {
   const studioPath = opts.studio ?? "/wavedb-studio";
   const apiPrefix = opts.apiPrefix ?? "/__wave/api";
   const staticDir = opts.staticDir ?? resolveStudioDist();
+  const handlerOpts = resolveEmbedHandlerOptions(db, opts);
   const handler = createWaveHandler(db, {
-    ...opts,
-    dataPath: opts.dataPath ? resolve(opts.dataPath) : opts.dataPath,
+    ...handlerOpts,
     apiPrefix,
     staticPrefix: studioPath,
     staticDir,
-    auth: opts.auth ?? !!opts.dataPath,
     cors: opts.cors ?? process.env.NODE_ENV !== "production",
   });
   const tryHandle = waveMiddleware(handler);

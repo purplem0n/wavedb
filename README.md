@@ -65,22 +65,44 @@ import { wave } from "@purplemon/wavedb";
 import { waveHost } from "@purplemon/wavedb/server";
 import { schema } from "./schema";
 
-const dataPath = "./data.wave";
-const db = await wave(dataPath, { schema });
+const db = await wave({ schema });
 
 const app = new Hono();
 app.get("/health", (c) => c.json({ ok: true }));
 
-const wave = waveHost(db, { dataPath }); // Studio at /wavedb-studio, API at /__wave/api (UI bundled in the package)
-app.use(wave.hono());
+app.use(waveHost(db).hono()); // Studio /wavedb-studio, API /__wave/api; auth + token from env (see below)
 
 // Bun: export default { port: 3000, fetch: app.fetch }
 // Node: @hono/node-server serve({ fetch: app.fetch, port: 3000 })
 ```
 
-Open `http://localhost:3000/wavedb-studio` (or `wave.studioPath`). Set `WAVE_ADMIN_PASSWORD` on first boot to skip the setup screen, or create a password in Studio. Remote clients: `connect("http://localhost:3000" + host.connectPath, { schema, token })`.
+Open `http://localhost:3000/wavedb-studio` (or `host.studioPath`). Set `WAVE_ADMIN_PASSWORD` before first boot to skip the setup screen, or create a password in Studio.
 
-Full example: [examples/hono-marketplace](examples/hono-marketplace).
+**Environment variables** (all optional for local dev; set on Fly/VPS as needed):
+
+| Variable | Required? | Purpose |
+|----------|-----------|---------|
+| `WAVE_DB_PATH` | **Recommended** on deployed hosts with a volume (defaults to `./data.wave`) | Database directory (e.g. `/data/data.wave`) |
+| `WAVE_DURABILITY` | Optional (`sync` if unset) | `sync` or `async` |
+| `WAVE_ADMIN_PASSWORD` | Optional | Bootstrap Studio password on first boot (else use Studio setup once) |
+| `WAVE_SERVE_TOKEN` | Optional for Studio in the browser; **required** for machine-only API access (`connect`, CLI `--token` without `--password`) | Static bearer for `Authorization: Bearer` |
+| `WAVE_LEADER` | Optional | Set to `1` to enable leader lease (shared volume / multi-node) |
+| `WAVE_STANDBY` | Optional | Set to `1` with `WAVE_LEADER` so a node serves health but not writes until it wins the lease |
+| `WAVE_TRUST_PROXY` | Optional | Set to `1` when TLS terminates at a proxy and the app must honor `X-Forwarded-Proto: https` for `Secure` cookies |
+| `WAVE_SESSION_SECRET` | Optional | Override session signing (default: `.wave/session.key` under the database directory) |
+
+**Auth (Studio vs automation).** Superuser login is **cookie-based**: `POST /__wave/api/auth/login` returns `{ "ok": true }` and sets `Set-Cookie: wave_session=…` (HttpOnly, scoped to the API prefix). The browser / Studio sends that cookie on later `/__wave/api/*` calls (`credentials: "include"`). Scripts and other processes should **not** expect a `token` field in the login JSON — use **`WAVE_SERVE_TOKEN`** (or `--token`) with `Authorization: Bearer` on `/api/*`, or `wave sql --url http://localhost:3000/__wave --password …` (CLI stores the session cookie). Behind TLS on Fly/proxies, set `WAVE_TRUST_PROXY=1` when the app sees `X-Forwarded-Proto: https`.
+
+```ts
+import { connect } from "@purplemon/wavedb";
+
+await connect("http://localhost:3000" + host.connectPath, {
+  schema,
+  token: process.env.WAVE_SERVE_TOKEN,
+});
+```
+
+Full example: [examples/hono-marketplace](examples/hono-marketplace). Upgrading from older releases: [docs/migrations.md](docs/migrations.md).
 
 ### GitHub (no npm registry)
 
@@ -118,7 +140,18 @@ On Linux / Docker / CI, set `WAVE_NATIVE_REQUIRED=1` during install so a missing
 
 WaveDB is embedded: one long-lived process owns a `data.wave` directory on **persistent disk**. Use a volume on Fly, Render, VPS, or Docker; not serverless/edge.
 
-Full patterns (embedded vs `serve` + `connect`, auth env vars, platforms, HA, backups, native addon on Linux): **[docs/deployment.md](docs/deployment.md)**.
+**Sidecar HTTP** (separate from your app process):
+
+```bash
+export WAVE_SERVE_TOKEN=…          # optional; same as --token for machine clients
+wave serve ./data.wave --port 4401 --host 127.0.0.1
+# shared volume / failover (opt-in — leader is NOT on by default):
+wave serve ./data.wave --leader --standby
+```
+
+Health checks use `GET /api/health` → `{ ok, standby, expiresAt }` (no secrets in the body). Programmatic clients use `connect(url, { token: process.env.WAVE_SERVE_TOKEN })`.
+
+Full patterns (embedded vs `serve` + `connect`, env vars, platforms, HA, backups, native addon on Linux): **[docs/deployment.md](docs/deployment.md)**. Breaking API/auth changes: **[docs/migrations.md](docs/migrations.md)**.
 
 ## License
 

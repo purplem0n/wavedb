@@ -90,8 +90,8 @@ bun packages/wave-cli/src/main.ts studio ./demo.wave   # → http://127.0.0.1:44
 ### CLI
 
 ```text
-wave studio [path]    web UI              --port 4400 --open --token T
-wave serve  [path]    HTTP API            --port 4401 --host 127.0.0.1 --token T
+wave studio [path]    web UI              --port 4400 --open  (--token T or WAVE_SERVE_TOKEN)
+wave serve  [path]    HTTP API            --port 4401 --host 127.0.0.1  (--token / WAVE_SERVE_TOKEN; --leader --standby for shared volume)
 wave sql [path] [SQL] one-shot / REPL     --json
 wave tables | stats | vacuum | compact [path]
 wave diff | push [path] --schema ./schema.ts [--force]
@@ -117,12 +117,12 @@ One process opens the database; your app uses the in-process `db`, while Studio 
 import { wave } from "@purplemon/wavedb";
 import { waveHost } from "@purplemon/wavedb/server";
 
-const db = await wave("./data.wave", { schema });
-const wave = waveHost(db, { dataPath: "./data.wave" });
-app.use(wave.hono()); // Studio at /wavedb-studio, API at /__wave/api (auto-detects Studio dist)
+const db = await wave({ schema });
+const host = waveHost(db);
+app.use(host.hono()); // Studio at /wavedb-studio, API at /__wave/api (auto-detects Studio dist)
 ```
 
-Superuser credentials live in `data.wave/.wave/admin.json`. Set `WAVE_ADMIN_PASSWORD` on first boot to skip the Studio setup screen. While the app is running, use `wave sql --url http://127.0.0.1:3000/__wave --token …` (or `--password`) instead of opening the files twice.
+Superuser credentials live in `data.wave/.wave/admin.json`. Set `WAVE_ADMIN_PASSWORD` on first boot to skip the Studio setup screen. Studio login uses cookies; automation uses `WAVE_SERVE_TOKEN` / `--token` on `connect` and `wave sql --url http://127.0.0.1:3000/__wave --token …` (or `--password` for cookie-based CLI session). See [migrations.md](migrations.md) when upgrading.
 
 See [examples/hono-marketplace](../examples/hono-marketplace).
 
