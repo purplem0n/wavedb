@@ -36,6 +36,8 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: oven-sh/setup-bun@v2
       - run: bun install
+        env:
+          WAVE_SKIP_NATIVE_DOWNLOAD: "1"
       - run: bunx @napi-rs/cli build --release --target ${{ matrix.target }} --cargo-cwd crates/wave-napi -o native --output-dir packages/wavedb/native
       - run: node scripts/sync-native-packages.mjs
       - run: node scripts/prebuild-smoke.mjs

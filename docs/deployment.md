@@ -11,7 +11,44 @@ npm install @purplemon/wavedb
 npm install -g @purplemon/wave-cli   # optional: `wave serve`, `wave studio`, …
 ```
 
-Prebuilt native addons ship via optional `@purplemon/wavedb-<platform>-<arch>` packages. From source (monorepo): `bun run build:native` (Rust stable required). See the [README](../README.md#install) for `bun`/`pnpm` and `npx` usage.
+Prebuilt native addons ship via optional `@purplemon/wavedb-<platform>-<arch>` packages (for example `@purplemon/wavedb-linux-x64` on Fly/Linux amd64). After `npm install @purplemon/wavedb`, your lockfile should list the matching optional package; if startup fails with “native addon not found”, install it explicitly:
+
+```bash
+npm install @purplemon/wavedb-linux-x64   # linux x64 (Fly, Render, Docker amd64)
+```
+
+From source (monorepo): `bun run build:native` (Rust stable required). The npm tarball does **not** include Rust sources—you cannot run `build:native` from `node_modules` alone. See the [README](../README.md#install) for `bun`/`pnpm` and `npx` usage.
+
+### Native addon on Linux / CI (Fly, Docker, GitHub deploy)
+
+Prebuilt binaries are attached to **[GitHub Releases](https://github.com/purplem0n/wavedb/releases)** on every `v*` tag (`wave.linux-x64.node`, etc.).
+
+**Recommended (npm ≥ 0.1.1):** `@purplemon/wavedb` runs `postinstall` and downloads the matching `.node` from the release that matches the package version. In your Dockerfile or Fly build:
+
+```dockerfile
+ENV WAVE_NATIVE_REQUIRED=1
+RUN bun install --frozen-lockfile   # or npm ci
+```
+
+Optional env:
+
+| Variable | Purpose |
+|----------|---------|
+| `WAVE_NATIVE_REQUIRED=1` | Fail the install step if the GitHub download fails (use in production images). |
+| `WAVE_SKIP_NATIVE_DOWNLOAD=1` | Skip download (monorepo dev / when optional npm native package is present). |
+| `WAVE_NATIVE_VERSION` / `WAVE_NATIVE_GITHUB_REPO` | Override release tag or repo (`purplem0n/wavedb` default). |
+| `WAVE_NATIVE_PATH` | Load a specific `.node` file at runtime (skip install layout). |
+
+**Manual (works with `@purplemon/wavedb@0.1.0` today):** after `npm install`, curl the asset into the package:
+
+```dockerfile
+ARG WAVEDB_VERSION=0.1.1
+RUN mkdir -p node_modules/@purplemon/wavedb/native \
+  && curl -fsSL -o node_modules/@purplemon/wavedb/native/wave.linux-x64.node \
+    "https://github.com/purplem0n/wavedb/releases/download/v${WAVEDB_VERSION}/wave.linux-x64.node"
+```
+
+Pin `WAVEDB_VERSION` to a tag that exists on [Releases](https://github.com/purplem0n/wavedb/releases). No npm token or Rust toolchain required.
 
 ## Patterns
 

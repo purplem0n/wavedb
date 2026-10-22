@@ -55,6 +55,8 @@ export function loadNative(): NativeModule {
     return cached;
   } catch {}
   throw new Error(
-    `WaveDB native addon not found for ${process.platform}-${process.arch}. Looked in:\n  ${candidates.join("\n  ")}\nRun \`bun run build:native\` (requires a Rust toolchain).`,
+    `WaveDB native addon not found for ${process.platform}-${process.arch}. Looked in:\n  ${candidates.join("\n  ")}\n` +
+      `Install optional @purplemon/wavedb-${process.platform}-${process.arch}, set WAVE_NATIVE_PATH, or reinstall with GitHub release assets ` +
+      `(postinstall downloads from github.com/purplem0n/wavedb releases; set WAVE_NATIVE_REQUIRED=1 in CI). Monorepo: \`bun run build:native\`.`,
   );
 }

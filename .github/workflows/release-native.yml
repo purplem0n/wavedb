@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+  id-token: write # npm trusted publishing (OIDC) — no long-lived NPM_TOKEN
+
 jobs:
   build:
     strategy:
@@ -33,9 +37,70 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: oven-sh/setup-bun@v2
       - run: bun install
+        env:
+          WAVE_SKIP_NATIVE_DOWNLOAD: "1"
       - run: bunx @napi-rs/cli build --release --target ${{ matrix.target }} --cargo-cwd crates/wave-napi -o native --output-dir packages/wavedb/native
       - run: node scripts/sync-native-packages.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.pkg }}
           path: packages/${{ matrix.pkg }}
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: native-artifacts
+      - name: Collect release .node binaries
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          for pkg in wavedb-darwin-arm64 wavedb-darwin-x64 wavedb-linux-arm64 wavedb-linux-x64 wavedb-win32-x64; do
+            if [ -d "native-artifacts/${pkg}" ]; then
+              cp native-artifacts/${pkg}/*.node release-assets/ 2>/dev/null || true
+            fi
+          done
+          ls -la release-assets
+          test "$(ls -1 release-assets/*.node 2>/dev/null | wc -l)" -ge 1
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
+
+  publish-npm:
+    needs: build
+    runs-on: ubuntu-latest
+    continue-on-error: true # GitHub Release is the prod fallback; npm may fail (OIDC, suspension, etc.)
+    # GitHub-hosted runners only (required for OIDC trusted publishing)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+      - name: npm CLI (trusted publishing requires ≥11.5.1)
+        run: npm install -g npm@11
+      - run: bun install
+        env:
+          WAVE_SKIP_NATIVE_DOWNLOAD: "1"
+      - uses: actions/download-artifact@v4
+        with:
+          path: native-artifacts
+      - name: Merge native artifacts into packages
+        run: |
+          set -euo pipefail
+          for pkg in wavedb-darwin-arm64 wavedb-darwin-x64 wavedb-linux-arm64 wavedb-linux-x64 wavedb-win32-x64; do
+            if [ -d "native-artifacts/${pkg}" ]; then
+              mkdir -p "packages/${pkg}"
+              cp -R "native-artifacts/${pkg}/." "packages/${pkg}/"
+            fi
+          done
+          ls -la packages/wavedb-linux-x64 || true
+      - run: tsc -p packages/wavedb/tsconfig.build.json && tsc -p packages/wave-cli/tsconfig.build.json
+      - run: node scripts/copy-studio.mjs
+      - run: node scripts/publish-npm.mjs

@@ -14,7 +14,7 @@ npm install @purplemon/wavedb
 # pnpm add @purplemon/wavedb
 ```
 
-Prebuilt native addons install automatically via optional packages (for example `@purplemon/wavedb-darwin-arm64`, `@purplemon/wavedb-linux-x64`). For HTTP `serve()` / `connect()` in Node, import from `@purplemon/wavedb/server`.
+Prebuilt native addons install via optional npm packages (`@purplemon/wavedb-linux-x64`, …) or, on `postinstall`, from **[GitHub Releases](https://github.com/purplem0n/wavedb/releases)** (set `WAVE_NATIVE_REQUIRED=1` in production Docker/Fly builds). See [deployment guide](docs/deployment.md#native-addon-on-linux--ci-fly-docker-github-deploy). For HTTP `serve()` / `connect()` in Node, import from `@purplemon/wavedb/server`.
 
 ### CLI (`wave` command)
 
