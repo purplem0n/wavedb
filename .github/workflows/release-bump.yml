@@ -73,7 +73,7 @@ jobs:
           v="${{ steps.align.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json packages/*/package.json
+          git add package.json packages/*/package.json Cargo.toml
           git commit -m "chore(release): align package versions with v${v} [skip ci]"
           git tag -fa "v${v}" -m "Release v${v}"
           git push origin main
@@ -94,7 +94,7 @@ jobs:
           v="${{ steps.bump.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json packages/*/package.json
+          git add package.json packages/*/package.json Cargo.toml
           git diff --staged --quiet && { echo "Nothing to commit"; exit 0; }
           git commit -m "chore(release): v${v} [skip ci]"
           if git rev-parse "v${v}" >/dev/null 2>&1; then

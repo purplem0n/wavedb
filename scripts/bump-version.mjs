@@ -1,4 +1,4 @@
-// Bump semver across monorepo packages. Patch auto-increments; at patch > 100 → patch 0, minor +1.
+// Bump semver across monorepo packages and Cargo.toml [workspace.package]. Patch auto-increments; at patch > 100 → patch 0, minor +1.
 // Baseline = max(package.json, latest v* git tag) so tags and manifests stay aligned.
 // --align-only: if package.json is behind the latest tag, set versions to the tag (no increment).
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
@@ -87,12 +87,26 @@ function writeJson({ path, data }) {
   writeFileSync(path, JSON.stringify(data, null, 2) + "\n");
 }
 
+function writeCargoVersion(version) {
+  const path = join(root, "Cargo.toml");
+  const text = readFileSync(path, "utf8");
+  const next = text.replace(
+    /(\[workspace\.package\]\nversion = ")[^"]+(")/,
+    `$1${version}$2`,
+  );
+  if (next === text) {
+    throw new Error("Cargo.toml [workspace.package] version not found");
+  }
+  writeFileSync(path, next);
+}
+
 function writeVersionToAll(version) {
   for (const rel of versionPaths) {
     const j = readJson(rel);
     j.data.version = version;
     writeJson(j);
   }
+  writeCargoVersion(version);
 }
 
 function githubOut(pairs) {
