@@ -1,6 +1,6 @@
 {
   "name": "wave-studio",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "private": true,
   "description": "Wave Studio — web UI for WaveDB (table browser, SQL console, schema, stats)",
   "type": "module",
