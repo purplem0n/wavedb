@@ -2,11 +2,38 @@
 
 **A concurrent-write embedded relational database for TypeScript** — one Rust core, usable from Node and Bun.
 
+## Install
+
+Requires **Node ≥ 20** or **Bun ≥ 1.1**. The npm scope is `@purplemon` (the unscoped name `wavedb` is a different package).
+
+### Library (app dependency)
+
 ```bash
-npm install @purplemon/wavedb    # or: bun add @purplemon/wavedb / pnpm add @purplemon/wavedb
+npm install @purplemon/wavedb
+# bun add @purplemon/wavedb
+# pnpm add @purplemon/wavedb
 ```
 
-Node ≥ 20 or Bun ≥ 1.1. Prebuilt native addons ship per platform; from this repo, run `bun run build:native` (Rust). [Deployment guide](docs/deployment.md).
+Prebuilt native addons install automatically via optional packages (for example `@purplemon/wavedb-darwin-arm64`, `@purplemon/wavedb-linux-x64`). For HTTP `serve()` / `connect()` in Node, import from `@purplemon/wavedb/server`.
+
+### CLI (`wave` command)
+
+Install globally (recommended if you use Studio or ad-hoc SQL often):
+
+```bash
+npm install -g @purplemon/wave-cli
+wave --help
+wave studio ./data.wave
+```
+
+Or run without a global install:
+
+```bash
+npx @purplemon/wave-cli studio ./data.wave
+# bunx @purplemon/wave-cli serve ./data.wave --port 4401
+```
+
+Production deployment patterns (volumes, `serve` + `connect`, platforms): [deployment guide](docs/deployment.md). Building from this repo (Rust toolchain): see [Quick start (from source)](#quick-start-monorepo--from-source) below.
 
 - **Many writers, no global write lock.** MVCC snapshots + optimistic concurrency control (OCC): transactions that touch
   different keys never block or conflict; conflicting ones are detected at commit and retried automatically by `db.tx()`.
