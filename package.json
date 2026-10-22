@@ -14,7 +14,7 @@
     "test": "bun run test:rust && bun run test:ts && bun run test:studio && bun run test:node && bun run test:hono-studio",
     "test:hono-studio": "bun run --cwd examples/hono-marketplace test:studio && bun run --cwd examples/hono-marketplace test:studio:npm",
     "test:rust": "cargo test --workspace",
-    "test:ts": "bun run build:native && bun test packages/wavedb/test packages/wave-cli/test",
+    "test:ts": "bun run build:native && bun test packages/wavedb/test packages/wave-cli/test packages/wave-studio/test examples/hono-marketplace/test",
     "test:node": "node scripts/node-smoke.mjs",
     "test:prebuild": "node scripts/prebuild-smoke.mjs",
     "bench": "bun run build:native && bun tools/bench/bench.ts",

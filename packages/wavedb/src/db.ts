@@ -8,6 +8,7 @@ import {
   count,
   decodeValue,
   encodeValue,
+  eq,
   inArray,
   type IR,
   type OrderSpec,
@@ -267,18 +268,30 @@ async function loadRelations(
       const ids = [...new Set(rows.map((r) => r[target.key]).filter((v) => v !== null && v !== undefined))];
       const groups = new Map<unknown, any[]>();
       if (ids.length) {
-        const where = and(toCondition(rel, opts.where), inArray((rel as any)[manyCol.key], ids));
-        const related = await (tq as any).run({ where, orderBy: opts.orderBy, with: opts.with });
-        for (const r of related) {
-          const k = keyOf(r[manyCol.key]);
-          let g = groups.get(k);
-          if (!g) groups.set(k, (g = []));
-          g.push(r);
+        if (opts.limit !== undefined) {
+          for (const pid of ids) {
+            const where = and(toCondition(rel, opts.where), eq((rel as any)[manyCol.key], pid as any));
+            const related = await (tq as any).run({
+              where,
+              orderBy: opts.orderBy,
+              limit: opts.limit,
+              with: opts.with,
+            });
+            groups.set(keyOf(pid), related);
+          }
+        } else {
+          const where = and(toCondition(rel, opts.where), inArray((rel as any)[manyCol.key], ids));
+          const related = await (tq as any).run({ where, orderBy: opts.orderBy, with: opts.with });
+          for (const r of related) {
+            const k = keyOf(r[manyCol.key]);
+            let g = groups.get(k);
+            if (!g) groups.set(k, (g = []));
+            g.push(r);
+          }
         }
       }
       for (const r of rows) {
-        const g = groups.get(keyOf(r[target.key])) ?? [];
-        r[key] = opts.limit !== undefined ? g.slice(0, opts.limit) : g;
+        r[key] = groups.get(keyOf(r[target.key])) ?? [];
       }
     } else if (oneCol) {
       const target = oneCol.config.references!();

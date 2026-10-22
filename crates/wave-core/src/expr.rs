@@ -721,7 +721,10 @@ pub fn eval(e: &BExpr, row: &[Value], aggs: &[Value]) -> Result<Value> {
         BExpr::Agg(i) => aggs.get(*i).cloned().unwrap_or(Value::Null),
         BExpr::Not(x) => bool_val(eval(x, row, aggs)?.truthy().map(|b| !b)),
         BExpr::Neg(x) => match eval(x, row, aggs)? {
-            Value::Int(i) => Value::Int(-i),
+            Value::Int(i) => Value::Int(
+                i.checked_neg()
+                    .ok_or_else(|| Error::Sql("integer overflow".into()))?,
+            ),
             Value::Real(f) => Value::Real(-f),
             Value::Null => Value::Null,
             v => return Err(Error::Sql(format!("cannot negate {}", v.type_name()))),
@@ -875,7 +878,7 @@ fn binop(op: BinOp, a: Value, b: Value) -> Result<Value> {
                 (Le, Some(o)) => o != Ordering::Greater,
                 (Gt, Some(o)) => o == Ordering::Greater,
                 (Ge, Some(o)) => o != Ordering::Less,
-                (Ne, None) => true,
+                (Ne, None) => false,
                 _ => false,
             })
         }
@@ -888,13 +891,19 @@ fn binop(op: BinOp, a: Value, b: Value) -> Result<Value> {
                     if *y == 0 {
                         return Err(Error::Sql("division by zero".into()));
                     }
-                    Value::Int(x.wrapping_div(*y))
+                    if *x == i64::MIN && *y == -1 {
+                        return Err(Error::Sql("integer overflow".into()));
+                    }
+                    Value::Int(*x / *y)
                 }
                 _ => {
                     if *y == 0 {
                         return Err(Error::Sql("division by zero".into()));
                     }
-                    Value::Int(x.wrapping_rem(*y))
+                    if *x == i64::MIN && *y == -1 {
+                        return Err(Error::Sql("integer overflow".into()));
+                    }
+                    Value::Int(*x % *y)
                 }
             },
             _ => match (a.as_f64(), b.as_f64()) {
@@ -987,7 +996,10 @@ fn call_func(name: &str, a: Vec<Value>) -> Result<Value> {
         "abs" => {
             arity(1)?;
             match &a[0] {
-                Value::Int(i) => Value::Int(i.abs()),
+                Value::Int(i) => Value::Int(
+                    i.checked_abs()
+                        .ok_or_else(|| Error::Sql("integer overflow".into()))?,
+                ),
                 Value::Real(f) => Value::Real(f.abs()),
                 Value::Null => Value::Null,
                 _ => return Err(Error::Sql("abs() requires a number".into())),

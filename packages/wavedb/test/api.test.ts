@@ -255,6 +255,8 @@ describe("sql tag", () => {
     // injection attempt stays data
     await db.sql`INSERT INTO users (name, email) VALUES (${"x'); DROP TABLE users; --"}, ${"i@x"})`;
     expect((await db.sql`SELECT count(*) AS n FROM users`)[0]!.n).toBe(3);
+    const r5 = await db.sql`SELECT id FROM users WHERE id IN (${[1, 2]}) ORDER BY id`;
+    expect(r5.map((r) => r.id)).toEqual([1, 2]);
     await db.close();
   });
 

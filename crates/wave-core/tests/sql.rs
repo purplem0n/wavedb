@@ -843,3 +843,47 @@ fn timestamps_uuid_json_defaults() {
     let r = q(&db, "SELECT json_extract(meta, 'k.1') FROM doc WHERE meta IS NOT NULL");
     assert_eq!(r, vec![vec![i(2)]]);
 }
+
+#[test]
+fn sql_rejects_multi_statement_scripts() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE m (id INT PRIMARY KEY, n INT)");
+    assert!(db
+        .execute_sql("INSERT INTO m VALUES (1, 1); DELETE FROM m", &[])
+        .is_err());
+    assert_eq!(q(&db, "SELECT count(*) FROM m"), vec![vec![i(0)]]);
+}
+
+#[test]
+fn sql_begin_does_not_span_calls() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE m (id INT PRIMARY KEY, n INT)");
+    assert!(db.execute_sql("BEGIN", &[]).is_err());
+    db.execute_sql("INSERT INTO m VALUES (1, 10)", &[]).unwrap();
+    assert!(db.execute_sql("ROLLBACK", &[]).is_err());
+    assert_eq!(q(&db, "SELECT n FROM m WHERE id = 1"), vec![vec![i(10)]]);
+}
+
+#[test]
+fn sql_incomparable_ne_is_false() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE t (id INT PRIMARY KEY)");
+    q(&db, "INSERT INTO t VALUES (1),(2)");
+    assert_eq!(
+        q(&db, "SELECT id FROM t WHERE id != 'x'"),
+        Vec::<Vec<Value>>::new()
+    );
+    db.execute_sql("DELETE FROM t WHERE id != 'x'", &[]).unwrap();
+    assert_eq!(q(&db, "SELECT count(*) FROM t"), vec![vec![i(2)]]);
+}
+
+#[test]
+fn sql_int64_extremes_error() {
+    let (_d, db) = open_tmp();
+    let min = i64::MIN;
+    assert!(db.execute_sql("SELECT abs($1)", &[Value::Int(min)]).is_err());
+    assert!(db.execute_sql("SELECT -$1", &[Value::Int(min)]).is_err());
+    assert!(db
+        .execute_sql("SELECT $1 / -1", &[Value::Int(min)])
+        .is_err());
+}

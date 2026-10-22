@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, engineQueryDurationMs, quote, uiToEngineLatencyMs, type QueryResult, type TableDef } from "./api";
+import { tableWhereClause, validateTableFilter } from "./tableFilter";
 import { DataGrid } from "./DataGrid";
 import { RefreshIcon } from "./icons";
 import { waveEngineVersionTag } from "./version";
@@ -29,7 +30,7 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
     setLoading(true);
     const t0 = performance.now();
     try {
-      const where = applied.trim() ? ` WHERE ${applied}` : "";
+      const where = tableWhereClause(applied);
       const order = sort ? ` ORDER BY ${quote(sort.column)} ${sort.desc ? "DESC" : "ASC"}` : "";
       const [rows, count] = await Promise.all([
         api.sql(`SELECT * FROM ${quote(table.name)}${where}${order} LIMIT ${PAGE} OFFSET ${page * PAGE}`),
@@ -85,8 +86,14 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
         className="filter-bar"
         onSubmit={(e) => {
           e.preventDefault();
-          setPage(0);
-          setApplied(filter);
+          try {
+            validateTableFilter(filter);
+            setPage(0);
+            setApplied(filter);
+            setError(null);
+          } catch (err) {
+            setError((err as Error).message);
+          }
         }}
       >
         <label htmlFor="where-input">Filter (SQL WHERE):</label>

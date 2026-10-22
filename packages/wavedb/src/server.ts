@@ -104,9 +104,19 @@ async function readJsonBody(req: IncomingMessage, limit = 64 * 1024 * 1024): Pro
 }
 
 async function readRequestJson(request: Request, limit = 64 * 1024 * 1024): Promise<any> {
-  const text = await request.text();
-  if (!text) return {};
-  if (text.length > limit) throw new WaveError("request body too large", "WAVE_INVALID");
+  if (!request.body) return {};
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) throw new WaveError("request body too large", "WAVE_INVALID");
+    chunks.push(value);
+  }
+  if (size === 0) return {};
+  const text = Buffer.concat(chunks.map((c) => Buffer.from(c))).toString("utf8");
   try {
     return JSON.parse(text);
   } catch {
@@ -178,9 +188,11 @@ function embedStudioIndex(html: string, staticPrefix: string, apiPrefix: string)
   return out;
 }
 
-function isHttps(request: Request | IncomingMessage): boolean {
-  if ("headers" in request && typeof (request as IncomingMessage).headers?.["x-forwarded-proto"] === "string") {
-    return (request as IncomingMessage).headers["x-forwarded-proto"] === "https";
+const MAX_OPEN_TX = 256;
+
+function isHttps(request: Request | IncomingMessage, waveAuth?: WaveAuth): boolean {
+  if (waveAuth && "headers" in request) {
+    return waveAuth.isSecureRequest(request as IncomingMessage);
   }
   if (request instanceof Request) {
     return new URL(request.url).protocol === "https:";
@@ -194,8 +206,15 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
   const apiPrefix = normalizePrefix(opts.apiPrefix ?? "/api") || "/api";
   const staticPrefix = opts.staticPrefix ?? "/";
   const authEnabled = opts.auth ?? !!opts.dataPath;
+  const cookiePath = apiPrefix || "/api";
   const waveAuth: WaveAuth | undefined =
-    authEnabled && opts.dataPath ? initWaveAuth(resolve(opts.dataPath), { machineToken: opts.token }) : undefined;
+    authEnabled && opts.dataPath
+      ? initWaveAuth(resolve(opts.dataPath), {
+          machineToken: opts.token,
+          cookiePath,
+          trustProxy: process.env.WAVE_TRUST_PROXY === "1",
+        })
+      : undefined;
 
   const txs = new Map<string, { tx: TxBackend; timer: ReturnType<typeof setTimeout> }>();
   let stopLeader: (() => void) | undefined;
@@ -203,13 +222,13 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
   let active = true;
 
   if (opts.leader && opts.dataPath) {
-    const got = acquireLeaderLease({ dataPath: opts.dataPath, token: opts.token });
+    const got = acquireLeaderLease({ dataPath: resolve(opts.dataPath) });
     if (!got.ok) {
       if (!opts.standby) throw new WaveError(got.reason ?? "not leader", "WAVE_INVALID");
       active = false;
     } else if (got.lease) {
       leader = got.lease;
-      stopLeader = startLeaderRenewal({ dataPath: opts.dataPath, token: opts.token }, leader.holder);
+      stopLeader = startLeaderRenewal({ dataPath: resolve(opts.dataPath) }, leader.holder);
     }
   }
 
@@ -255,7 +274,7 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
     path === "/api/auth/logout";
 
   async function handleApi(method: string, path: string, body: any, reqLike: IncomingMessage | Request): Promise<Response> {
-    const secure = isHttps(reqLike as Request);
+    const secure = isHttps(reqLike as Request, waveAuth);
     const req =
       reqLike instanceof Request
         ? ({ headers: { cookie: reqLike.headers.get("cookie") ?? undefined, authorization: reqLike.headers.get("authorization") ?? undefined } } as IncomingMessage)
@@ -263,7 +282,11 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
 
     if (method === "GET" && path === "/api/ping") return jsonResponse(200, { ok: true });
     if (method === "GET" && path === "/api/health")
-      return jsonResponse(active ? 200 : 503, { ok: active, leader: leader ?? null, standby: !active });
+      return jsonResponse(active ? 200 : 503, {
+        ok: active,
+        standby: !active,
+        expiresAt: leader?.expiresAt ?? null,
+      });
     if (method === "GET" && path === "/api/auth/status") {
       if (!waveAuth) return jsonResponse(200, { phase: "ready", auth: false });
       return jsonResponse(200, { ...waveAuth.status(req), auth: true, apiPrefix: apiPrefix || "/api" });
@@ -272,9 +295,9 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       if (!waveAuth) return jsonResponse(400, { error: { code: "WAVE_INVALID", message: "auth disabled" } });
       try {
         const password = String(body.password ?? "");
-        waveAuth.setup(password);
-        const token = waveAuth.login(password);
-        return jsonResponse(200, { ok: true, token }, { "set-cookie": waveAuth.sessionCookie(token, secure) });
+        await waveAuth.setup(password);
+        const token = await waveAuth.login(password);
+        return jsonResponse(200, { ok: true }, { "set-cookie": waveAuth.sessionCookie(token, secure) });
       } catch (e) {
         return jsonResponse(400, { error: { code: "WAVE_INVALID", message: (e as Error).message } });
       }
@@ -282,8 +305,8 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
     if (method === "POST" && path === "/api/auth/login") {
       if (!waveAuth) return jsonResponse(400, { error: { code: "WAVE_INVALID", message: "auth disabled" } });
       try {
-        const token = waveAuth.login(String(body.password ?? ""));
-        return jsonResponse(200, { ok: true, token }, { "set-cookie": waveAuth.sessionCookie(token, secure) });
+        const token = await waveAuth.login(String(body.password ?? ""));
+        return jsonResponse(200, { ok: true }, { "set-cookie": waveAuth.sessionCookie(token, secure) });
       } catch {
         return jsonResponse(401, { error: { code: "WAVE_INVALID", message: "invalid password" } });
       }
@@ -313,6 +336,9 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       return jsonResponse(200, r);
     }
     if (path === "/api/tx/begin") {
+      if (txs.size >= MAX_OPEN_TX) {
+        return jsonResponse(503, { error: { code: "WAVE_INVALID", message: "too many open transactions" } });
+      }
       const tx = await db.backend.begin(body.isolation === "serializable" ? "serializable" : "snapshot");
       const id = randomUUID();
       txs.set(id, { tx, timer: setTimeout(() => {}, 0) });
@@ -345,7 +371,13 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       const js = studioRuntimeConfigJs(apiPrefix || "/api");
       return new Response(js, { status: 200, headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" } });
     }
+    if (/(\.\.|%2e%2e)/i.test(rel)) {
+      return new Response(null, { status: 403 });
+    }
     let fileRel = normalize(decodeURIComponent(rel)).replace(/^([/\\])+/, "");
+    if (fileRel.includes("..")) {
+      return new Response(null, { status: 403 });
+    }
     let file = join(staticDir, fileRel);
     if (file !== staticDir && !file.startsWith(staticDir + sep)) {
       return new Response(null, { status: 403 });

@@ -681,7 +681,10 @@ fn conv_expr(e: &a::Expr, cx: &mut Cx) -> Result<Expr> {
             match op {
                 a::UnaryOperator::Not => Expr::Not { e: Box::new(inner) },
                 a::UnaryOperator::Minus => match inner {
-                    Expr::Lit { v: Value::Int(i) } => Expr::lit(Value::Int(-i)),
+                    Expr::Lit { v: Value::Int(i) } => Expr::lit(Value::Int(
+                        i.checked_neg()
+                            .ok_or_else(|| Error::Sql("integer overflow".into()))?,
+                    )),
                     Expr::Lit { v: Value::Real(f) } => Expr::lit(Value::Real(-f)),
                     other => Expr::Neg { e: Box::new(other) },
                 },

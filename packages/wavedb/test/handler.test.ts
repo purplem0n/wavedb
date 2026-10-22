@@ -40,9 +40,12 @@ describe("createWaveHandler", () => {
         body: JSON.stringify({ password: "supersecret1" }),
       }),
     );
-    const loginJson = (await login.json()) as { token: string };
+    const cookie = login.headers.get("set-cookie") ?? "";
+    const session = /wave_session=([^;]+)/.exec(cookie)?.[1];
+    expect(session).toBeTruthy();
+    const token = decodeURIComponent(session!);
     const tables = await handler.fetch(
-      new Request(`${base}/wave/api/tables`, { headers: { authorization: `Bearer ${loginJson.token}` } }),
+      new Request(`${base}/wave/api/tables`, { headers: { authorization: `Bearer ${token}` } }),
     );
     expect(tables.status).toBe(200);
     expect((await tables.json()).map((t: { name: string }) => t.name)).toEqual(["items"]);
@@ -50,7 +53,7 @@ describe("createWaveHandler", () => {
     const run = await handler.fetch(
       new Request(`${base}/wave/api/run`, {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${loginJson.token}` },
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
         body: JSON.stringify({ sql: "SELECT count(*) AS n FROM items" }),
       }),
     );
@@ -77,7 +80,7 @@ describe("createWaveHandler", () => {
 
     const srv = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (req) => handler.fetch(req) });
     try {
-      const remote = await connect(`http://127.0.0.1:${srv.port}/wave`, { schema, token: loginJson.token });
+      const remote = await connect(`http://127.0.0.1:${srv.port}/wave`, { schema, token });
       await remote.insert(items).values({ name: "x" });
       expect(await remote.query.items.count()).toBe(1);
       await remote.close();
@@ -98,6 +101,46 @@ describe("createWaveHandler", () => {
     });
     expect(nextCalled).toBe(true);
     await host.close();
+    await db.close();
+  });
+
+  test("health and multi-statement /api/run", async () => {
+    const { db, dir } = await openTmp({ schema });
+    const handler = createWaveHandler(db, {
+      dataPath: join(dir, "data.wave"),
+      auth: true,
+      token: "run-token",
+      leader: true,
+    });
+    const health = await handler.fetch(new Request("http://x/api/health"));
+    const h = (await health.json()) as { ok: boolean; standby: boolean; expiresAt: number | null };
+    expect(h.ok).toBe(true);
+    expect(h.standby).toBe(false);
+    expect(typeof h.expiresAt).toBe("number");
+
+    const bad = await handler.fetch(
+      new Request("http://x/api/run", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer run-token" },
+        body: JSON.stringify({ sql: "INSERT INTO items (name) VALUES ('a'); DELETE FROM items" }),
+      }),
+    );
+    expect(bad.status).toBe(400);
+    await handler.close();
+    await db.close();
+  });
+
+  test("static path traversal is rejected", async () => {
+    const { db, dir } = await openTmp({ schema });
+    const staticDir = join(tmpDir(), "studio-trav");
+    mkdirSync(staticDir, { recursive: true });
+    writeFileSync(join(staticDir, "index.html"), "ok");
+    writeFileSync(join(staticDir, "safe.js"), "ok");
+    const handler = createWaveHandler(db, { dataPath: join(dir, "data.wave"), auth: false, staticDir });
+    expect((await handler.fetch(new Request("http://x/safe.js"))).status).toBe(200);
+    expect((await handler.fetch(new Request("http://x/..%2f..%2fetc/passwd"))).status).toBe(403);
+    expect((await handler.fetch(new Request("http://x/foo/..%2f..%2f..%2fetc/passwd"))).status).toBe(403);
+    await handler.close();
     await db.close();
   });
 

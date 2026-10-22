@@ -62,6 +62,17 @@ export function compileSql(frag: SqlFragment): CompiledSql {
         const v = f.values[i];
         if (v instanceof SqlFragment) {
           out += walk(v);
+        } else if (Array.isArray(v)) {
+          if (v.length === 0) {
+            out += "NULL";
+          } else {
+            const slots: string[] = [];
+            for (const item of v) {
+              params.push(encodeValue(item));
+              slots.push(`$${params.length}`);
+            }
+            out += slots.join(", ");
+          }
         } else {
           params.push(encodeValue(v));
           out += `$${params.length}`;

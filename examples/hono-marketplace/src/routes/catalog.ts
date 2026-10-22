@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { and, asc, desc, eq, gte, inArray, inc, like, lte } from "@purplemon/wavedb";
+import { and, asc, desc, eq, gte, inArray, inc, like, lte, sql } from "@purplemon/wavedb";
 import type { AppEnv } from "../db/context.ts";
 import { customers, orders, orderItems, productReviews, products, regions, sellers } from "../db/schema.ts";
 
@@ -210,7 +210,7 @@ catalog.get("/customers/:id/orders", async (c) => {
     SELECT oi.order_id AS orderId, oi.id AS itemId, oi.product_id AS productId, oi.qty, oi.unit_price AS unitPrice, p.title
     FROM order_items oi
     INNER JOIN products p ON p.id = oi.product_id
-    WHERE oi.order_id IN (${orderIds})
+    WHERE oi.order_id IN (${sql.join(orderIds.map((id) => sql`${id}`))})
     ORDER BY oi.order_id, oi.id
   `;
 
@@ -249,25 +249,18 @@ catalog.post("/orders", async (c) => {
   const customer = await db.select({ id: customers.id }).from(customers).where(eq(customers.id, body.customerId)).first();
   if (!customer) return c.json({ error: "customer_not_found" }, 404);
 
-  const productIds = body.lines.map((l) => l.productId);
-  const stockRows = await db
-    .select({ id: products.id, price: products.price, stock: products.stock })
-    .from(products)
-    .where(inArray(products.id, productIds));
-  const byId = new Map(stockRows.map((p) => [p.id, p]));
-
-  for (const line of body.lines) {
-    const p = byId.get(line.productId);
-    if (!p || p.stock < line.qty) return c.json({ error: "insufficient_stock", productId: line.productId }, 409);
-  }
-
   let created: { id: number; ref: string; total: number } | undefined;
   try {
     await db.tx(async (tx) => {
       let total = 0;
       const lineRows: { productId: number; qty: number; unitPrice: number }[] = [];
       for (const line of body.lines) {
-        const p = byId.get(line.productId)!;
+        const p = await tx
+          .select({ id: products.id, price: products.price, stock: products.stock })
+          .from(products)
+          .where(eq(products.id, line.productId))
+          .first();
+        if (!p || p.stock < line.qty) throw new Error("insufficient_stock");
         total += p.price * line.qty;
         lineRows.push({ productId: line.productId, qty: line.qty, unitPrice: p.price });
       }
@@ -319,6 +312,21 @@ catalog.patch("/orders/:id/status", async (c) => {
   const body = await c.req.json<{ status: string }>();
   const allowed = new Set(["pending", "paid", "shipped", "delivered", "cancelled"]);
   if (!allowed.has(body.status)) return c.json({ error: "invalid_status" }, 400);
+
+  const existing = await db.select({ id: orders.id, status: orders.status, total: orders.total, customerId: orders.customerId }).from(orders).where(eq(orders.id, id)).first();
+  if (!existing) return c.json({ error: "not_found" }, 404);
+
+  if (body.status === "cancelled" && existing.status !== "cancelled") {
+    await db.tx(async (tx) => {
+      const items = await tx.select({ productId: orderItems.productId, qty: orderItems.qty }).from(orderItems).where(eq(orderItems.orderId, id));
+      for (const item of items) {
+        await tx.update(products).set({ stock: inc(item.qty) }).where(eq(products.id, item.productId));
+      }
+      await tx.update(orders).set({ status: "cancelled" }).where(eq(orders.id, id));
+      await tx.update(customers).set({ lifetimeValue: inc(-existing.total) }).where(eq(customers.id, existing.customerId));
+    });
+    return c.json({ ok: true });
+  }
 
   const r = await db.update(orders).set({ status: body.status }).where(eq(orders.id, id));
   if (r.rowsAffected === 0) return c.json({ error: "not_found" }, 404);

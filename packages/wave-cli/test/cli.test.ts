@@ -108,6 +108,26 @@ describe("wave cli", () => {
     await db.close();
   });
 
+  test("WAVE_SERVE_TOKEN is the server bearer", async () => {
+    const path = join(tmpDir(), "envtok.wave");
+    const prev = process.env.WAVE_SERVE_TOKEN;
+    process.env.WAVE_SERVE_TOKEN = "env-bearer-secret";
+    try {
+      const r = await wv(["serve", path, "--port", "0"]);
+      expect("running" in r.res).toBe(true);
+      if (!("running" in r.res)) return;
+      const server = r.res.running;
+      const ok = await fetch(server.url + "/api/tables", { headers: { authorization: "Bearer env-bearer-secret" } });
+      expect(ok.status).toBe(200);
+      const bad = await fetch(server.url + "/api/tables", { headers: { authorization: "Bearer wrong" } });
+      expect(bad.status).toBe(401);
+      await server.close();
+    } finally {
+      if (prev === undefined) delete process.env.WAVE_SERVE_TOKEN;
+      else process.env.WAVE_SERVE_TOKEN = prev;
+    }
+  });
+
   test("serve starts an HTTP server other processes can use", async () => {
     const path = join(tmpDir(), "s.wave");
     const r = await wv(["serve", path, "--port", "0", "--token", "cli-secret"]);

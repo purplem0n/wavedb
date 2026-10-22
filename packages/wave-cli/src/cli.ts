@@ -221,6 +221,12 @@ function cliSessionPath(url: string): string {
   return join(process.cwd(), ".wave", `cli-${hash}.json`);
 }
 
+function sessionFromSetCookie(header: string | null): string | undefined {
+  if (!header) return undefined;
+  const m = /(?:^|,)\s*wave_session=([^;]+)/i.exec(header);
+  return m ? decodeURIComponent(m[1]!) : undefined;
+}
+
 async function loginRemoteToken(base: string, password: string): Promise<string> {
   const root = base.replace(/\/+$/, "");
   const res = await fetch(`${root}/api/auth/login`, {
@@ -230,8 +236,9 @@ async function loginRemoteToken(base: string, password: string): Promise<string>
   });
   const data = (await res.json().catch(() => ({}))) as { token?: string; error?: { message?: string } };
   if (!res.ok) throw new Error(data.error?.message ?? `login failed (${res.status})`);
-  if (!data.token) throw new Error("login did not return a session token");
-  return data.token;
+  const token = sessionFromSetCookie(res.headers.get("set-cookie")) ?? data.token;
+  if (!token) throw new Error("login did not return a session token");
+  return token;
 }
 
 async function resolveRemoteToken(base: string, flags: Record<string, string | true>): Promise<string | undefined> {
@@ -324,7 +331,7 @@ export async function run(argv: string[], io: IO): Promise<RunResult> {
       const server = await serve(db, {
         port,
         host: typeof flags.host === "string" ? flags.host : "127.0.0.1",
-        token: typeof flags.token === "string" ? flags.token : undefined,
+        token: typeof flags.token === "string" ? flags.token : process.env.WAVE_SERVE_TOKEN,
         staticDir: dir,
         cors: !!flags.cors,
         dataPath: resolve(path),
@@ -339,11 +346,11 @@ export async function run(argv: string[], io: IO): Promise<RunResult> {
       const server = await serve(db, {
         port: flags.port ? Number(flags.port) : 4401,
         host: typeof flags.host === "string" ? flags.host : "127.0.0.1",
-        token: typeof flags.token === "string" ? flags.token : undefined,
+        token: typeof flags.token === "string" ? flags.token : process.env.WAVE_SERVE_TOKEN,
         cors: !!flags.cors,
         dataPath: resolve(path),
         auth: !flags["no-auth"],
-        leader: !("leader" in flags) || flags.leader === true,
+        leader: flags.leader === true,
         standby: !!flags.standby,
       });
       io.out(`WaveDB serving ${resolve(path)} at ${server.url}\n`);

@@ -5,6 +5,7 @@ dist/
 data.wave/
 **/data.wave/
 .wave-tmp/
+.wave/
 .DS_Store
 bun.lock
 *.log

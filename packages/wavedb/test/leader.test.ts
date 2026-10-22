@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireLeaderLease, renewLeaderLease, releaseLeaderLease } from "../src/leader.ts";
+import { createWaveHandler } from "../src/server.ts";
+import { openTmp } from "./helpers.ts";
 
 describe("leader lease", () => {
   test("acquire and renew", () => {
@@ -18,5 +20,53 @@ describe("leader lease", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("live lease cannot be stolen on same host", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wave-leader-"));
+    try {
+      const a = acquireLeaderLease({ dataPath: dir, ttlMs: 60_000 });
+      expect(a.ok).toBe(true);
+      const b = acquireLeaderLease({ dataPath: dir, ttlMs: 60_000 });
+      expect(b.ok).toBe(false);
+      const onDisk = JSON.parse(readFileSync(join(dir, ".wave", "leader.json"), "utf8")) as { holder: string };
+      expect(onDisk.holder).toBe(a.lease!.holder);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("lease file is mode 0600 and has no token field", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wave-leader-"));
+    try {
+      acquireLeaderLease({ dataPath: dir, ttlMs: 5000 });
+      const path = join(dir, ".wave", "leader.json");
+      const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      expect(raw.token).toBeUndefined();
+      if (process.platform !== "win32") {
+        expect(statSync(path).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("health omits bearer with leader and token", async () => {
+    const { db, dir } = await openTmp({});
+    const secret = "health-test-token";
+    const handler = createWaveHandler(db, {
+      dataPath: join(dir, "data.wave"),
+      auth: true,
+      token: secret,
+      leader: true,
+    });
+    const res = await handler.fetch(new Request("http://x/api/health"));
+    const text = await res.text();
+    expect(text).not.toContain(secret);
+    const json = JSON.parse(text) as { ok: boolean; standby: boolean; expiresAt: number | null; leader?: unknown };
+    expect(json.leader).toBeUndefined();
+    expect(json.expiresAt === null || typeof json.expiresAt === "number").toBe(true);
+    await handler.close();
+    await db.close();
   });
 });

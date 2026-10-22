@@ -6,7 +6,7 @@ import { catalog } from "./routes/catalog.ts";
 export function createApp(db: MarketplaceDb) {
   const app = new Hono<AppEnv>();
 
-  app.use("*", cors());
+  app.use("/api/*", cors());
   app.use("*", async (c, next) => {
     c.set("db", db);
     await next();
@@ -32,8 +32,7 @@ export function createApp(db: MarketplaceDb) {
     return c.json({
       ok: true,
       ...(counts ? { counts } : {}),
-      engine: stats,
-      memory: process.memoryUsage(),
+      ...(detail ? { engine: stats } : {}),
     });
   });
 

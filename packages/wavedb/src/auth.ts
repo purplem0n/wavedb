@@ -1,9 +1,12 @@
 // Superuser credentials and session auth for Wave HTTP / Studio (not app SQL tables).
 
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import type { IncomingMessage } from "node:http";
+
+const scryptAsync = promisify(scrypt);
 
 const ADMIN_FILE = "admin.json";
 const SESSION_KEY_FILE = "session.key";
@@ -16,19 +19,29 @@ export interface AdminRecord {
   createdAt: string;
 }
 
+export interface WaveAuthOptions {
+  machineToken?: string;
+  bootstrapPassword?: string;
+  /** Set-Cookie Path (default `/`). */
+  cookiePath?: string;
+  /** Honor X-Forwarded-Proto: https when true. */
+  trustProxy?: boolean;
+}
+
 export interface WaveAuth {
   dataPath: string;
-  /** Static bearer for M2M (`opts.token` / WAVE_SERVE_TOKEN). */
   machineToken?: string;
+  cookiePath: string;
   hasAdmin(): boolean;
   status(req?: IncomingMessage): { phase: "setup" | "login" | "ready"; authenticated?: boolean };
-  setup(password: string): void;
-  login(password: string): string;
+  setup(password: string): Promise<void>;
+  login(password: string): Promise<string>;
   verifySession(token: string | undefined): boolean;
   parseCookie(header: string | undefined): string | undefined;
   sessionCookie(token: string, secure: boolean): string;
   clearCookie(secure: boolean): string;
   authorize(req: IncomingMessage): boolean;
+  isSecureRequest(req: IncomingMessage): boolean;
 }
 
 function waveDir(dataPath: string): string {
@@ -37,8 +50,9 @@ function waveDir(dataPath: string): string {
   return dir;
 }
 
-function hashPassword(password: string, salt: string): string {
-  return scryptSync(password, salt, 64).toString("hex");
+async function hashPassword(password: string, salt: string): Promise<string> {
+  const buf = (await scryptAsync(password, salt, 64)) as Buffer;
+  return buf.toString("hex");
 }
 
 function readAdmin(dataPath: string): AdminRecord | undefined {
@@ -52,12 +66,12 @@ function readAdmin(dataPath: string): AdminRecord | undefined {
 }
 
 function writeAdmin(dataPath: string, rec: AdminRecord): void {
-  writeFileSync(join(waveDir(dataPath), ADMIN_FILE), JSON.stringify(rec, null, 2) + "\n", { mode: 0o600 });
+  writeFileSync(join(waveDir(dataPath), ADMIN_FILE), JSON.stringify(rec, null, 2) + "\n", { flag: "wx", mode: 0o600 });
 }
 
 function sessionSecret(dataPath: string): Buffer {
   const env = process.env.WAVE_SESSION_SECRET;
-  if (env) return createHash("sha256").update(env).digest();
+  if (env) return Buffer.from(env, "utf8");
   const p = join(waveDir(dataPath), SESSION_KEY_FILE);
   if (existsSync(p)) return Buffer.from(readFileSync(p, "utf8").trim(), "hex");
   const key = randomBytes(32);
@@ -66,7 +80,7 @@ function sessionSecret(dataPath: string): Buffer {
 }
 
 function signSession(secret: Buffer, payload: string): string {
-  const sig = createHash("sha256").update(secret).update(payload).digest("hex");
+  const sig = createHmac("sha256", secret).update(payload).digest("hex");
   return `${payload}.${sig}`;
 }
 
@@ -75,7 +89,7 @@ function verifySignedFixed(secret: Buffer, token: string): { exp: number } | und
   if (i <= 0) return undefined;
   const payload = token.slice(0, i);
   const sig = token.slice(i + 1);
-  const want = createHash("sha256").update(secret).update(payload).digest("hex");
+  const want = createHmac("sha256", secret).update(payload).digest("hex");
   try {
     const a = Buffer.from(sig, "hex");
     const b = Buffer.from(want, "hex");
@@ -105,20 +119,44 @@ function parseCookies(header: string | undefined): Record<string, string> {
   return out;
 }
 
-export function initWaveAuth(dataPath: string, opts: { machineToken?: string; bootstrapPassword?: string } = {}): WaveAuth {
+const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+const LOGIN_WINDOW_MS = 60_000;
+const LOGIN_MAX = 30;
+
+function checkRateLimit(key: string): void {
+  const now = Date.now();
+  const e = loginAttempts.get(key);
+  if (!e || e.resetAt < now) {
+    loginAttempts.set(key, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+    return;
+  }
+  e.count += 1;
+  if (e.count > LOGIN_MAX) throw new Error("too many attempts; try again later");
+}
+
+export function initWaveAuth(dataPath: string, opts: WaveAuthOptions = {}): WaveAuth {
   const secret = sessionSecret(dataPath);
+  const cookiePath = opts.cookiePath && opts.cookiePath !== "/" ? opts.cookiePath : "/";
+  const trustProxy = opts.trustProxy ?? process.env.WAVE_TRUST_PROXY === "1";
   let admin = readAdmin(dataPath);
   const bootstrap = opts.bootstrapPassword ?? process.env.WAVE_ADMIN_PASSWORD;
   if (!admin && bootstrap) {
     const salt = randomBytes(16).toString("hex");
-    admin = { passwordHash: hashPassword(bootstrap, salt), salt, createdAt: new Date().toISOString() };
-    writeAdmin(dataPath, admin);
+    admin = { passwordHash: "", salt, createdAt: new Date().toISOString() };
+    // sync bootstrap for env-only deploys
+    const h = scryptSync(bootstrap, salt, 64).toString("hex");
+    admin.passwordHash = h;
+    try {
+      writeAdmin(dataPath, admin);
+    } catch {
+      admin = readAdmin(dataPath);
+    }
   }
 
-  const checkPassword = (password: string): boolean => {
+  const checkPassword = async (password: string): Promise<boolean> => {
     const a = readAdmin(dataPath);
     if (!a) return false;
-    const h = hashPassword(password, a.salt);
+    const h = await hashPassword(password, a.salt);
     try {
       return timingSafeEqual(Buffer.from(h), Buffer.from(a.passwordHash));
     } catch {
@@ -134,20 +172,32 @@ export function initWaveAuth(dataPath: string, opts: { machineToken?: string; bo
   return {
     dataPath,
     machineToken: opts.machineToken,
+    cookiePath,
     hasAdmin: () => !!readAdmin(dataPath),
     status(req?: IncomingMessage) {
       if (!readAdmin(dataPath)) return { phase: "setup" as const };
       if (req && this.authorize(req)) return { phase: "ready" as const };
       return { phase: "login" as const };
     },
-    setup(password: string) {
+    async setup(password: string) {
       if (readAdmin(dataPath)) throw new Error("admin already exists");
       if (!password || password.length < 8) throw new Error("password must be at least 8 characters");
+      checkRateLimit("setup");
       const salt = randomBytes(16).toString("hex");
-      writeAdmin(dataPath, { passwordHash: hashPassword(password, salt), salt, createdAt: new Date().toISOString() });
+      const rec: AdminRecord = {
+        passwordHash: await hashPassword(password, salt),
+        salt,
+        createdAt: new Date().toISOString(),
+      };
+      try {
+        writeAdmin(dataPath, rec);
+      } catch {
+        throw new Error("admin already exists");
+      }
     },
-    login(password: string) {
-      if (!checkPassword(password)) throw new Error("invalid password");
+    async login(password: string) {
+      checkRateLimit("login");
+      if (!(await checkPassword(password))) throw new Error("invalid password");
       return makeToken();
     },
     verifySession(token: string | undefined) {
@@ -158,14 +208,24 @@ export function initWaveAuth(dataPath: string, opts: { machineToken?: string; bo
       return parseCookies(header)[COOKIE_NAME];
     },
     sessionCookie(token: string, secure: boolean) {
-      const parts = [`${COOKIE_NAME}=${encodeURIComponent(token)}`, "HttpOnly", "Path=/", "SameSite=Lax", `Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`];
+      const parts = [
+        `${COOKIE_NAME}=${encodeURIComponent(token)}`,
+        "HttpOnly",
+        `Path=${cookiePath}`,
+        "SameSite=Lax",
+        `Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`,
+      ];
       if (secure) parts.push("Secure");
       return parts.join("; ");
     },
     clearCookie(secure: boolean) {
-      const parts = [`${COOKIE_NAME}=`, "HttpOnly", "Path=/", "SameSite=Lax", "Max-Age=0"];
+      const parts = [`${COOKIE_NAME}=`, "HttpOnly", `Path=${cookiePath}`, "SameSite=Lax", "Max-Age=0"];
       if (secure) parts.push("Secure");
       return parts.join("; ");
+    },
+    isSecureRequest(req: IncomingMessage) {
+      if (trustProxy && req.headers["x-forwarded-proto"] === "https") return true;
+      return false;
     },
     authorize(req: IncomingMessage) {
       const pathAuth = this.parseCookie(req.headers.cookie);

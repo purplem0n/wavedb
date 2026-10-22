@@ -188,10 +188,12 @@ export class SelectBuilder<
     return this;
   }
   limit(n: number): this {
+    if (!Number.isFinite(n) || n < 0) throw new Error("limit must be a non-negative finite number");
     this._limit = n;
     return this;
   }
   offset(n: number): this {
+    if (!Number.isFinite(n) || n < 0) throw new Error("offset must be a non-negative finite number");
     this._offset = n;
     return this;
   }

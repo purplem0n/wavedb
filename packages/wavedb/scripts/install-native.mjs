@@ -3,8 +3,9 @@
  * After install: fetch prebuilt wave.<platform>-<arch>.node from GitHub Releases
  * when the addon is not already present (monorepo build, WAVE_NATIVE_PATH, etc.).
  */
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,8 +50,25 @@ async function main() {
     console.warn(msg);
     process.exit(0);
   }
+  const buf = Buffer.from(await res.arrayBuffer());
+  const checksumsPath = join(pkgRoot, "native", "checksums.json");
+  let expected = process.env.WAVE_NATIVE_SHA256;
+  if (!expected && existsSync(checksumsPath)) {
+    try {
+      const sums = JSON.parse(readFileSync(checksumsPath, "utf8"));
+      expected = sums[file];
+    } catch {
+      /* ignore */
+    }
+  }
+  if (expected) {
+    const got = createHash("sha256").update(buf).digest("hex");
+    if (got !== expected.toLowerCase()) {
+      throw new Error(`SHA-256 mismatch for ${file} (got ${got}, expected ${expected})`);
+    }
+  }
   mkdirSync(dirname(dest), { recursive: true });
-  writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
+  writeFileSync(dest, buf);
   console.log(`[wavedb] installed native addon → ${dest}`);
 }
 
