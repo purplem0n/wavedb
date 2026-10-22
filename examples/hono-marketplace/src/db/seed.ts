@@ -1,9 +1,9 @@
-import { join } from "node:path";
 import { wave, type Database } from "@purplemon/wavedb";
 import { type AppSchema, schema } from "./schema.ts";
+import { marketplaceWavePath } from "./paths.ts";
 import { resolveSeedProfile, type SeedProfile } from "./seed-profile.ts";
 
-const BATCH = 5_000;
+const BATCH = 10_000;
 const ORDER_STATUSES = ["pending", "paid", "shipped", "delivered", "cancelled"] as const;
 const SEGMENTS = ["consumer", "pro", "enterprise"] as const;
 const TIERS = ["standard", "premium", "enterprise"] as const;
@@ -29,27 +29,93 @@ async function insertBatches<T extends Record<string, unknown>>(
   console.log(` — ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 }
 
-export async function openMarketplaceDb(dataDir: string, seedIfNeeded: boolean) {
-  const path = join(dataDir, "marketplace.wave");
-  const db = await wave(path, { schema, durability: seedIfNeeded ? "async" : "sync" });
-  if (seedIfNeeded) await ensureSeeded(db);
+function buildOrderLines(orderId: number, itemsPerOrder: number, products: number) {
+  let total = 0;
+  const lines: { id: number; orderId: number; productId: number; qty: number; unitPrice: number }[] = [];
+  for (let line = 0; line < itemsPerOrder; line++) {
+    const itemId = orderId * itemsPerOrder + line;
+    const productId = (orderId * 11 + line * 17) % products;
+    const qty = 1 + (itemId % 4);
+    const unitPrice = 5 + (productId % 100);
+    total += qty * unitPrice;
+    lines.push({ id: itemId, orderId, productId, qty, unitPrice });
+  }
+  return { total, lines };
+}
+
+async function insertOrderBatches(
+  db: Database<AppSchema>,
+  orderCount: number,
+  itemsPerOrder: number,
+  customers: number,
+  products: number,
+) {
+  const itemTotal = orderCount * itemsPerOrder;
+  const t0 = performance.now();
+  for (let off = 0; off < orderCount; off += BATCH) {
+    const size = Math.min(BATCH, orderCount - off);
+    const orderRows = new Array<{
+      id: number;
+      customerId: number;
+      status: (typeof ORDER_STATUSES)[number];
+      total: number;
+      placedAt: Date;
+      ref: string;
+    }>(size);
+    const itemRows: { id: number; orderId: number; productId: number; qty: number; unitPrice: number }[] = [];
+    itemRows.length = size * itemsPerOrder;
+    let itemIdx = 0;
+    for (let k = 0; k < size; k++) {
+      const id = off + k;
+      const { total, lines } = buildOrderLines(id, itemsPerOrder, products);
+      for (const line of lines) itemRows[itemIdx++] = line;
+      orderRows[k] = {
+        id,
+        customerId: id % customers,
+        status: ORDER_STATUSES[id % ORDER_STATUSES.length]!,
+        total,
+        placedAt: new Date(1_710_000_000_000 + id * 2_000),
+        ref: `ORD-${id}`,
+      };
+    }
+    await db.tx(async (tx) => {
+      await tx.insert(schema.orders).values(orderRows).execute();
+      await tx.insert(schema.orderItems).values(itemRows).execute();
+    });
+    if (off === 0 || off + size >= orderCount || (off / BATCH) % 10 === 0) {
+      const ordersDone = Math.min(off + size, orderCount);
+      const itemsDone = Math.min(ordersDone * itemsPerOrder, itemTotal);
+      process.stdout.write(
+        `\r  orders+items: ${fmt(ordersDone)} orders (${fmt(itemsDone)} lines) / ${fmt(orderCount)} (${fmt(itemTotal)} lines)`,
+      );
+    }
+  }
+  console.log(` — ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+}
+
+export async function openMarketplaceDb(seedIfNeeded: boolean, wavePath = marketplaceWavePath()) {
+  const db = await wave(wavePath, { schema, durability: seedIfNeeded ? "async" : "sync" });
+  if (seedIfNeeded) await ensureSeeded(db, wavePath);
   return db;
 }
 
-async function ensureSeeded(db: Database<AppSchema>) {
+async function ensureSeeded(db: Database<AppSchema>, dbPath: string) {
   const done = await db.query.seedMeta.findFirst({ where: { key: "seed_v1" } }).catch(() => undefined);
   if (done?.value === "ok") {
     console.log("Database already seeded (seed_meta.seed_v1=ok). Skipping load.");
     return;
   }
-  const profile = resolveSeedProfile();
+  await seedDatabase(db, resolveSeedProfile(), dbPath);
+}
+
+async function seedDatabase(db: Database<AppSchema>, profile: SeedProfile, dbPath: string) {
   console.log(`Seeding WaveDB (${profile.name} profile)…`);
   await runSeed(db, profile);
   await db
     .insert(schema.seedMeta)
     .values({ key: "seed_v1", value: "ok" })
     .onConflictDoUpdate({ target: schema.seedMeta.key, set: { value: "ok" } });
-  console.log("Seed complete.");
+  console.log(`Seed complete. Open in Studio: wave studio ${dbPath}`);
 }
 
 export async function runSeed(db: Database<AppSchema>, profile: SeedProfile) {
@@ -116,7 +182,7 @@ export async function runSeed(db: Database<AppSchema>, profile: SeedProfile) {
         sellerId,
         categoryId: id % categories,
         sku: `SKU-${id}`,
-        title: `Product ${id} — ${["Widget", "Gadget", "Part"][id % 3]}`,
+        title: `Product ${id}`,
         price: 5 + (id % 200) + (id % 7) / 10,
         stock: 50 + (id % 500),
         active: id % 17 === 0 ? 0 : 1,
@@ -125,40 +191,7 @@ export async function runSeed(db: Database<AppSchema>, profile: SeedProfile) {
     }),
   (rows) => db.tx(async (tx) => tx.insert(schema.products).values(rows).execute()));
 
-  await insertBatches("orders", orders, (off, size) =>
-    Array.from({ length: size }, (_, k) => {
-      const id = off + k;
-      let total = 0;
-      for (let line = 0; line < itemsPerOrder; line++) {
-        const itemId = id * itemsPerOrder + line;
-        const productId = (id * 11 + line * 17) % products;
-        const qty = 1 + (itemId % 4);
-        const unitPrice = 5 + (productId % 100);
-        total += qty * unitPrice;
-      }
-      return {
-        id,
-        customerId: id % customers,
-        status: ORDER_STATUSES[id % ORDER_STATUSES.length]!,
-        total,
-        placedAt: new Date(1_710_000_000_000 + id * 2_000),
-        ref: `ORD-${id}`,
-      };
-    }),
-  (rows) => db.tx(async (tx) => tx.insert(schema.orders).values(rows).execute()));
-
-  const totalItems = orders * itemsPerOrder;
-  await insertBatches("order_items", totalItems, (off, size) =>
-    Array.from({ length: size }, (_, k) => {
-      const id = off + k;
-      const orderId = Math.floor(id / itemsPerOrder);
-      const line = id % itemsPerOrder;
-      const productId = (orderId * 11 + line * 17) % products;
-      const qty = 1 + (id % 4);
-      const unitPrice = 5 + (productId % 100);
-      return { id, orderId, productId, qty, unitPrice };
-    }),
-  (rows) => db.tx(async (tx) => tx.insert(schema.orderItems).values(rows).execute()));
+  await insertOrderBatches(db, orders, itemsPerOrder, customers, products);
 
   // sparse reviews (~10% of products, one per customer-product pair in sample)
   const reviewTarget = Math.min(products, Math.floor(products / 10));
@@ -177,12 +210,22 @@ export async function runSeed(db: Database<AppSchema>, profile: SeedProfile) {
   (rows) => db.insert(schema.productReviews).values(rows).execute());
 }
 
-/** Force re-seed (destructive): only for `bun run seed -- --force` */
-export async function seedOnly(dataDir: string, force: boolean) {
+/** Seed only (optional wipe). Pass `profile` to bypass `SEED_PROFILE` (e.g. small dev dataset). */
+export async function seedOnly(force: boolean, profile?: SeedProfile, wavePath = marketplaceWavePath()) {
   if (force) {
     const { rmSync } = await import("node:fs");
-    rmSync(join(dataDir, "marketplace.wave"), { recursive: true, force: true });
+    rmSync(wavePath, { recursive: true, force: true });
   }
-  const db = await openMarketplaceDb(dataDir, true);
+  const path = wavePath;
+  const db = await wave(path, { schema, durability: "async" });
+  if (!force) {
+    const done = await db.query.seedMeta.findFirst({ where: { key: "seed_v1" } }).catch(() => undefined);
+    if (done?.value === "ok") {
+      console.log("Database already seeded (seed_meta.seed_v1=ok). Skipping load.");
+      await db.close();
+      return;
+    }
+  }
+  await seedDatabase(db, profile ?? resolveSeedProfile(), path);
   await db.close();
 }

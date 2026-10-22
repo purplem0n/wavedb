@@ -248,8 +248,7 @@ async function finalize(
 if (baseUrl) {
   await runHttp();
 } else {
-  const dataDir = process.env.DATA_DIR ?? join(import.meta.dir, "..", "data");
-  const db = await openMarketplaceDb(dataDir, true);
+  const db = await openMarketplaceDb(true);
   const app = createApp(db);
   await runInProcess(app, db);
 }

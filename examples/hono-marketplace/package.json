@@ -7,6 +7,9 @@
     "start": "bun run src/index.ts",
     "seed": "bun run scripts/seed.ts",
     "seed:force": "bun run scripts/seed.ts --force",
+    "seed:small": "bun run scripts/seed-small.ts",
+    "seed:small:force": "bun run scripts/seed-small.ts --force",
+    "studio": "wave studio data.wave",
     "stress": "bun run scripts/stress.ts",
     "stress:quick": "STRESS_DURATION_SEC=30 SEED_PROFILE=quick bun run scripts/stress.ts"
   },

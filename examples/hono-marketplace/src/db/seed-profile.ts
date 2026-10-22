@@ -1,4 +1,4 @@
-export type SeedProfileName = "quick" | "demo" | "full";
+export type SeedProfileName = "small" | "quick" | "demo" | "full";
 
 export interface SeedProfile {
   name: SeedProfileName;
@@ -12,6 +12,17 @@ export interface SeedProfile {
 }
 
 export const SEED_PROFILES: Record<SeedProfileName, SeedProfile> = {
+  /** All tables, ~1k rows — fast local dev */
+  small: {
+    name: "small",
+    regions: 5,
+    sellers: 25,
+    categories: 20,
+    products: 150,
+    customers: 80,
+    orders: 120,
+    itemsPerOrder: 3,
+  },
   /** Smoke / CI — ~250k rows */
   quick: {
     name: "quick",

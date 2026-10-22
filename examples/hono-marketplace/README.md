@@ -18,12 +18,13 @@ cd examples/hono-marketplace
 bun run dev
 ```
 
-On first start, the app seeds the database under `./data/` (skipped on later runs via `seed_meta`).
+On first start, the app seeds **`./data.wave`** (same file as `wave studio`; skipped on later runs via `seed_meta`).
 
 ### Seed profiles
 
 | `SEED_PROFILE` | Approx. rows | Use |
 |----------------|-------------|-----|
+| `small` | ~1k | Fast local dev (or `bun run seed:small:force`) |
 | `quick` | ~250k | CI / laptop smoke |
 | `demo` | ~1.2M | Medium demo |
 | `full` (default) | ~3.9M | Full stress / benchmark |
@@ -32,6 +33,14 @@ On first start, the app seeds the database under `./data/` (skipped on later run
 SEED_PROFILE=quick bun run dev
 SEED_PROFILE=full bun run seed          # seed only
 SEED_PROFILE=full bun run seed:force    # wipe data/ and re-seed
+bun run seed:small:force                # wipe data/ and re-seed (~1k rows, all tables)
+```
+
+### Wave Studio
+
+```bash
+bun run seed:small:force   # populate ./data.wave
+wave studio                # or: bun run studio
 ```
 
 ## Endpoints
