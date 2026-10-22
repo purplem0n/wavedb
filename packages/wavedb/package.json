@@ -28,6 +28,7 @@
   },
   "files": [
     "dist",
+    "studio",
     "native",
     "scripts/install-native.mjs",
     "README.md"

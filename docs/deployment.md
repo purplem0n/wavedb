@@ -57,7 +57,7 @@ Pin `WAVEDB_VERSION` to a tag that exists on [Releases](https://github.com/purpl
 | Pattern | Use when |
 |--------|----------|
 | **Embedded** | One app process owns the DB: `await wave("/data/app.wave", { schema, durability: "sync" })` |
-| **Embedded + Studio** | Same process: `app.use(waveHost(db, { dataPath }).hono())` ([example](../examples/hono-marketplace)) |
+| **Embedded + Studio** | Same process: `app.use(waveHost(db, { dataPath }).hono())` ([example](../examples/hono-marketplace)). Prebuilt Studio ships inside `@purplemon/wavedb` (`studio/`); no separate frontend build in your app. |
 | **Sidecar `serve`** | Multiple workers / languages: one `wave serve` opens files; others use `connect("http://127.0.0.1:4401", { token })` |
 | **Remote + failover** | `connect(primaryUrl, { urls: [primary, standby], token })` probes `/api/health` |
 

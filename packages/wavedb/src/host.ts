@@ -28,13 +28,17 @@ export interface WaveHost {
   hono(): MiddlewareHandler;
 }
 
-/** Locate a built Wave Studio `dist/` (monorepo, npm, or `WAVE_STUDIO_DIR`). */
+/** Locate prebuilt Wave Studio static assets (bundled with wavedb, monorepo, or `WAVE_STUDIO_DIR`). */
 export function resolveStudioDist(): string | undefined {
   const here = dirname(fileURLToPath(import.meta.url));
   const candidates = [
     process.env.WAVE_STUDIO_DIR,
+    join(here, "..", "studio"),
+    join(here, "..", "..", "wave-cli", "studio"),
     join(here, "..", "..", "wave-studio", "dist"),
     join(here, "..", "wave-studio", "dist"),
+    join(process.cwd(), "node_modules", "@purplemon", "wavedb", "studio"),
+    join(process.cwd(), "node_modules", "@purplemon", "wave-cli", "studio"),
     join(process.cwd(), "node_modules", "@purplemon", "wave-studio", "dist"),
   ].filter((p): p is string => !!p);
   return candidates.find((c) => existsSync(join(c, "index.html")));

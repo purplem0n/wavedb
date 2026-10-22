@@ -10,7 +10,7 @@
   "scripts": {
     "build:native": "node scripts/build-native.mjs",
     "build:native:debug": "node scripts/build-native.mjs --debug",
-    "build": "bun run build:native && tsc -p packages/wavedb/tsconfig.build.json && tsc -p packages/wave-cli/tsconfig.build.json && bun run test:studio",
+    "build": "bun run build:native && tsc -p packages/wavedb/tsconfig.build.json && tsc -p packages/wave-cli/tsconfig.build.json && bun run test:studio && node scripts/copy-studio.mjs",
     "test": "bun run test:rust && bun run test:ts && bun run test:studio && bun run test:node",
     "test:rust": "cargo test --workspace",
     "test:ts": "bun run build:native && bun test packages/wavedb/test packages/wave-cli/test",

@@ -5,8 +5,6 @@
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "start": "bun run src/index.ts",
-    "build:studio": "bun run --cwd ../../packages/wave-studio build",
-    "prestart": "bun run build:studio",
     "seed": "bun run scripts/seed.ts",
     "seed:force": "bun run scripts/seed.ts --force",
     "seed:small": "bun run scripts/seed-small.ts",

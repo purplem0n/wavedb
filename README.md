@@ -71,7 +71,7 @@ const db = await wave(dataPath, { schema });
 const app = new Hono();
 app.get("/health", (c) => c.json({ ok: true }));
 
-const wave = waveHost(db, { dataPath }); // Studio at /studio, API at /__wave/api
+const wave = waveHost(db, { dataPath }); // Studio at /studio, API at /__wave/api (UI bundled in the package)
 app.use(wave.hono());
 
 // Bun: export default { port: 3000, fetch: app.fetch }
