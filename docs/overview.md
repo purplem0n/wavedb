@@ -119,7 +119,7 @@ import { waveHost } from "@purplemon/wavedb/server";
 
 const db = await wave("./data.wave", { schema });
 const wave = waveHost(db, { dataPath: "./data.wave" });
-app.use(wave.hono()); // Studio at /studio, API at /__wave/api (auto-detects Studio dist)
+app.use(wave.hono()); // Studio at /wavedb-studio, API at /__wave/api (auto-detects Studio dist)
 ```
 
 Superuser credentials live in `data.wave/.wave/admin.json`. Set `WAVE_ADMIN_PASSWORD` on first boot to skip the Studio setup screen. While the app is running, use `wave sql --url http://127.0.0.1:3000/__wave --token …` (or `--password`) instead of opening the files twice.

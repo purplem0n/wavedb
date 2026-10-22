@@ -63,14 +63,14 @@ try {
   if (status.phase !== "setup") fail(`expected phase setup, got ${JSON.stringify(status)}`);
   if (status.auth !== true) fail(`expected auth enabled, got ${JSON.stringify(status)}`);
 
-  const studioRes = await fetch(`${base}/studio/`);
-  if (!studioRes.ok) fail(`GET /studio/ → ${studioRes.status}`);
+  const studioRes = await fetch(`${base}/wavedb-studio/`);
+  if (!studioRes.ok) fail(`GET /wavedb-studio/ → ${studioRes.status}`);
   const html = await studioRes.text();
   if (!html.includes("__WAVE_API_PREFIX__")) fail("studio index missing injected API prefix");
   if (!html.includes("/__wave/api")) fail("studio index missing /__wave/api prefix");
 
-  const configRes = await fetch(`${base}/studio/config.js`);
-  if (!configRes.ok) fail(`GET /studio/config.js → ${configRes.status}`);
+  const configRes = await fetch(`${base}/wavedb-studio/config.js`);
+  if (!configRes.ok) fail(`GET /wavedb-studio/config.js → ${configRes.status}`);
   const configJs = await configRes.text();
   if (!configJs.includes("/__wave/api")) fail("config.js missing /__wave/api");
 

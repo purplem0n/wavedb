@@ -71,14 +71,14 @@ const db = await wave(dataPath, { schema });
 const app = new Hono();
 app.get("/health", (c) => c.json({ ok: true }));
 
-const wave = waveHost(db, { dataPath }); // Studio at /studio, API at /__wave/api (UI bundled in the package)
+const wave = waveHost(db, { dataPath }); // Studio at /wavedb-studio, API at /__wave/api (UI bundled in the package)
 app.use(wave.hono());
 
 // Bun: export default { port: 3000, fetch: app.fetch }
 // Node: @hono/node-server serve({ fetch: app.fetch, port: 3000 })
 ```
 
-Open `http://localhost:3000/studio` (or `wave.studioPath`). Set `WAVE_ADMIN_PASSWORD` on first boot to skip the setup screen, or create a password in Studio. Remote clients: `connect("http://localhost:3000" + host.connectPath, { schema, token })`.
+Open `http://localhost:3000/wavedb-studio` (or `wave.studioPath`). Set `WAVE_ADMIN_PASSWORD` on first boot to skip the setup screen, or create a password in Studio. Remote clients: `connect("http://localhost:3000" + host.connectPath, { schema, token })`.
 
 Full example: [examples/hono-marketplace](examples/hono-marketplace).
 

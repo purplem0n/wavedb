@@ -9,6 +9,7 @@ import { WaveError, mapNativeError } from "./errors.ts";
 import type { Database, TxBackend } from "./db.ts";
 import { acquireLeaderLease, startLeaderRenewal, type LeaderLease } from "./leader.ts";
 import { initWaveAuth, normalizePrefix, type WaveAuth } from "./auth.ts";
+import { wavedbPackageVersion } from "./pkgVersion.ts";
 
 export interface HandlerOptions {
   /** Path to database directory (leader lease + superuser auth). */
@@ -23,7 +24,7 @@ export interface HandlerOptions {
   auth?: boolean;
   /** URL prefix for API routes (default `/api`). Embedded: `/__wave/api`. */
   apiPrefix?: string;
-  /** URL prefix for Studio static files (default `/`). Embedded: `/studio`. */
+  /** URL prefix for Studio static files (default `/`). Embedded: `/wavedb-studio`. */
   staticPrefix?: string;
   /** Built Wave Studio `dist/` directory. */
   staticDir?: string;
@@ -44,7 +45,7 @@ export interface WaveHandler {
   close(): Promise<void>;
   /** Resolved API prefix (e.g. `/api` or `/__wave/api`). */
   apiPrefix: string;
-  /** Resolved static prefix (e.g. `/` or `/studio`). */
+  /** Resolved static prefix (e.g. `/` or `/wavedb-studio`). */
   staticPrefix: string;
 }
 
@@ -138,11 +139,23 @@ function staticRelPath(pathname: string, staticPrefix: string): string | undefin
   return pathname.slice(p.length + 1);
 }
 
-/** Vite `base: "./"` breaks under `/studio` without a trailing slash; fix at serve time. */
+function studioRuntimeConfigJs(apiPrefix: string): string {
+  const prefix = normalizePrefix(apiPrefix) || "/api";
+  const version = wavedbPackageVersion();
+  return (
+    `window.__WAVE_API_PREFIX__=${JSON.stringify(prefix)};\n` +
+    `window.__WAVE_ENGINE_VERSION__=${JSON.stringify(version)};\n`
+  );
+}
+
+/** Vite `base: "./"` breaks under a subpath without a trailing slash; fix at serve time. */
 function embedStudioIndex(html: string, staticPrefix: string, apiPrefix: string): string {
   const base = `${normalizePrefix(staticPrefix)}/`;
   const prefix = normalizePrefix(apiPrefix) || "/api";
-  const boot = `<script>window.__WAVE_API_PREFIX__=${JSON.stringify(prefix)};</script>`;
+  const version = wavedbPackageVersion();
+  const boot =
+    `<script>window.__WAVE_API_PREFIX__=${JSON.stringify(prefix)};` +
+    `window.__WAVE_ENGINE_VERSION__=${JSON.stringify(version)};</script>`;
   let out = html;
   if (!/<base\s/i.test(out)) {
     if (/<head[\s>]/i.test(out)) {
@@ -328,10 +341,8 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
     if (!staticDir) {
       return new Response("WaveDB server. Use API routes.", { status: 404, headers: { "content-type": "text/plain" } });
     }
-    const injectConfig = opts.studioConfig !== false && normalizePrefix(staticPrefix) && rel === "config.js";
-    if (injectConfig) {
-      const prefix = apiPrefix || "/api";
-      const js = `window.__WAVE_API_PREFIX__=${JSON.stringify(prefix)};\n`;
+    if (opts.studioConfig !== false && staticDir && rel === "config.js") {
+      const js = studioRuntimeConfigJs(apiPrefix || "/api");
       return new Response(js, { status: 200, headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" } });
     }
     let fileRel = normalize(decodeURIComponent(rel)).replace(/^([/\\])+/, "");

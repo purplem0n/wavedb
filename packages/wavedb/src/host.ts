@@ -9,7 +9,7 @@ import { normalizePrefix } from "./auth.ts";
 import { createWaveHandler, waveMiddleware, type HandlerOptions, type WaveHandler } from "./server.ts";
 
 export interface WaveHostOptions extends Omit<HandlerOptions, "staticPrefix" | "apiPrefix" | "staticDir"> {
-  /** URL path for Studio (default `/studio`). */
+  /** URL path for Studio (default `/wavedb-studio`). */
   studio?: string;
   /** URL prefix for Wave HTTP API (default `/__wave/api`). */
   apiPrefix?: string;
@@ -19,7 +19,7 @@ export interface WaveHostOptions extends Omit<HandlerOptions, "staticPrefix" | "
 
 export interface WaveHost {
   handler: WaveHandler;
-  /** Studio mount path, e.g. `/studio`. */
+  /** Studio mount path, e.g. `/wavedb-studio`. */
   studioPath: string;
   /** Base URL path for `connect()` / `wave --url`, e.g. `/__wave`. */
   connectPath: string;
@@ -52,7 +52,7 @@ function connectPathFromApiPrefix(apiPrefix: string): string {
 
 /** Mount Wave Studio + HTTP API on an existing server (minimal Hono/Bun integration). */
 export function waveHost(db: Database<any>, opts: WaveHostOptions): WaveHost {
-  const studioPath = opts.studio ?? "/studio";
+  const studioPath = opts.studio ?? "/wavedb-studio";
   const apiPrefix = opts.apiPrefix ?? "/__wave/api";
   const staticDir = opts.staticDir ?? resolveStudioDist();
   const handler = createWaveHandler(db, {

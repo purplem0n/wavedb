@@ -1,2 +1,2 @@
-// Default API prefix; embedded hosts may replace this file dynamically at `/studio/config.js`.
+// Defaults for static hosting; `wave studio` / embedded Wave host replace this file at runtime.
 window.__WAVE_API_PREFIX__ = window.__WAVE_API_PREFIX__ || "/api";

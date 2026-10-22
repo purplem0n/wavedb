@@ -78,6 +78,8 @@ export class ApiError extends Error {
 declare global {
   interface Window {
     __WAVE_API_PREFIX__?: string;
+    /** Injected by Wave server `config.js` at runtime (matches @purplemon/wavedb package.json). */
+    __WAVE_ENGINE_VERSION__?: string;
   }
 }
 

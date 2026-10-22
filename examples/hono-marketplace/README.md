@@ -38,7 +38,7 @@ bun run seed:small:force                # wipe data/ and re-seed (~1k rows, all 
 
 ### Wave Studio (same port as the API)
 
-With `bun run dev` or `bun run start`, the app calls `app.use(waveHost(db, { dataPath }).hono())` — Studio at **`/studio`**, HTTP API at **`/__wave/api`** (first visit: create superuser password; UI ships inside `@purplemon/wavedb`, no separate frontend build).
+With `bun run dev` or `bun run start`, the app calls `app.use(waveHost(db, { dataPath }).hono())` — Studio at **`/wavedb-studio`**, HTTP API at **`/__wave/api`** (first visit: create superuser password; UI ships inside `@purplemon/wavedb`, no separate frontend build).
 
 Verify embed (monorepo workspace):
 
@@ -55,7 +55,7 @@ bun run test:studio:npm
 ```bash
 bun run seed:small:force
 bun run dev
-# open http://localhost:3000/studio
+# open http://localhost:3000/wavedb-studio
 ```
 
 Standalone Studio on another port (separate process — do not use while `bun run dev` holds the same `data.wave`):

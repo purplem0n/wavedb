@@ -21,7 +21,7 @@ describe("createWaveHandler", () => {
       dataPath,
       auth: true,
       apiPrefix: "/wave/api",
-      staticPrefix: "/studio",
+      staticPrefix: "/wavedb-studio",
       staticDir,
     });
     const base = "http://127.0.0.1";
@@ -59,19 +59,21 @@ describe("createWaveHandler", () => {
     expect(typeof runJson.durationMs).toBe("number");
     expect(runJson.durationMs!).toBeGreaterThanOrEqual(0);
 
-    const redirect = await handler.fetch(new Request(`${base}/studio`));
+    const redirect = await handler.fetch(new Request(`${base}/wavedb-studio`));
     expect(redirect.status).toBe(308);
-    expect(new URL(redirect.headers.get("location")!).pathname).toBe("/studio/");
+    expect(new URL(redirect.headers.get("location")!).pathname).toBe("/wavedb-studio/");
 
-    const page = await handler.fetch(new Request(`${base}/studio/`));
+    const page = await handler.fetch(new Request(`${base}/wavedb-studio/`));
     expect(page.status).toBe(200);
     const html = await page.text();
     expect(html).toContain("embedded");
-    expect(html).toContain('<base href="/studio/">');
+    expect(html).toContain('<base href="/wavedb-studio/">');
     expect(html).toContain('__WAVE_API_PREFIX__="/wave/api"');
 
-    const cfg = await handler.fetch(new Request(`${base}/studio/config.js`));
-    expect(await cfg.text()).toContain("/wave/api");
+    const cfg = await handler.fetch(new Request(`${base}/wavedb-studio/config.js`));
+    const cfgJs = await cfg.text();
+    expect(cfgJs).toContain("/wave/api");
+    expect(cfgJs).toContain("__WAVE_ENGINE_VERSION__");
 
     const srv = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (req) => handler.fetch(req) });
     try {
