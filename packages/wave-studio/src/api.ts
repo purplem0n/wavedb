@@ -55,6 +55,16 @@ export function engineQueryDurationMs(...results: Array<Pick<QueryResult, "durat
   return Math.max(...ms);
 }
 
+/** Browser round-trip minus engine time (HTTP, auth, JSON; excludes core SQL). */
+export function uiToEngineLatencyMs(
+  clientMs: number,
+  ...results: Array<Pick<QueryResult, "durationMs"> | undefined>
+): number | null {
+  const engine = engineQueryDurationMs(...results);
+  if (engine === null || !Number.isFinite(clientMs)) return null;
+  return Math.max(0, clientMs - engine);
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,

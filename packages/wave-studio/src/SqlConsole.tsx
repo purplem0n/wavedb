@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type QueryResult } from "./api";
+import { api, uiToEngineLatencyMs, type QueryResult } from "./api";
 import { DataGrid } from "./DataGrid";
 import { Icon } from "./icons";
 
@@ -13,7 +13,8 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
   const [text, setText] = useState(initial ?? "SELECT 1 AS hello;");
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [ms, setMs] = useState<number | null>(null);
+  const [engineMs, setEngineMs] = useState<number | null>(null);
+  const [uiLatencyMs, setUiLatencyMs] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [history, setHistory] = useState<string[]>(() => {
@@ -45,11 +46,14 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
     const sql = text.trim();
     if (!sql) return;
     setRunning(true);
+    const t0 = performance.now();
     try {
       const r = await api.sql(sql);
+      const clientMs = performance.now() - t0;
       setResult(r);
       setError(null);
-      setMs(r.durationMs ?? null);
+      setEngineMs(r.durationMs ?? null);
+      setUiLatencyMs(uiToEngineLatencyMs(clientMs, r));
       const next = [sql, ...history.filter((h) => h !== sql)].slice(0, 30);
       setHistory(next);
       localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
@@ -57,7 +61,8 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
     } catch (e) {
       setResult(null);
       setError((e as Error).message);
-      setMs(null);
+      setEngineMs(null);
+      setUiLatencyMs(null);
     } finally {
       setRunning(false);
     }
@@ -163,11 +168,13 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
                 ⌘↵
               </span>
             </button>
-            {ms !== null && result && (
+            {engineMs !== null && result && (
               <>
                 <span className="run-meta-dot" />
                 <span>
-                  Engine query {ms.toFixed(2)}ms • {result.rows.length} row{result.rows.length === 1 ? "" : "s"} returned
+                  Engine query {engineMs.toFixed(2)}ms
+                  {uiLatencyMs !== null && <> • UI → engine {uiLatencyMs.toFixed(2)}ms</>} • {result.rows.length} row
+                  {result.rows.length === 1 ? "" : "s"} returned
                 </span>
               </>
             )}

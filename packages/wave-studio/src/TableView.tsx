@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, engineQueryDurationMs, quote, type QueryResult, type TableDef } from "./api";
+import { api, engineQueryDurationMs, quote, uiToEngineLatencyMs, type QueryResult, type TableDef } from "./api";
 import { DataGrid } from "./DataGrid";
 import { RefreshIcon } from "./icons";
 
@@ -15,6 +15,7 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [queryMs, setQueryMs] = useState<number | null>(null);
+  const [uiLatencyMs, setUiLatencyMs] = useState<number | null>(null);
 
   useEffect(() => {
     setFilter("");
@@ -25,6 +26,7 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
 
   const load = useCallback(async () => {
     setLoading(true);
+    const t0 = performance.now();
     try {
       const where = applied.trim() ? ` WHERE ${applied}` : "";
       const order = sort ? ` ORDER BY ${quote(sort.column)} ${sort.desc ? "DESC" : "ASC"}` : "";
@@ -32,13 +34,16 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
         api.sql(`SELECT * FROM ${quote(table.name)}${where}${order} LIMIT ${PAGE} OFFSET ${page * PAGE}`),
         api.sql(`SELECT count(*) AS n FROM ${quote(table.name)}${where}`),
       ]);
+      const clientMs = performance.now() - t0;
       setResult(rows);
       setTotal(Number(count.rows[0]?.[0] ?? 0));
       setQueryMs(engineQueryDurationMs(rows, count));
+      setUiLatencyMs(uiToEngineLatencyMs(clientMs, rows, count));
       setError(null);
     } catch (e) {
       setError((e as Error).message);
       setQueryMs(null);
+      setUiLatencyMs(null);
     } finally {
       setLoading(false);
     }
@@ -150,6 +155,12 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
                 <>
                   {" "}
                   • Engine query: <span className="accent">{queryMs.toFixed(2)}ms</span>
+                </>
+              )}
+              {uiLatencyMs !== null && (
+                <>
+                  {" "}
+                  • UI → engine: <span className="accent">{uiLatencyMs.toFixed(2)}ms</span>
                 </>
               )}
             </>
