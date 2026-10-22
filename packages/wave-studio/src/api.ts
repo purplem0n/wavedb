@@ -90,7 +90,8 @@ async function call<T>(method: "GET" | "POST", subPath: string, body?: unknown):
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const e = data?.error ?? {};
+    const raw = data?.error;
+    const e = typeof raw === "string" ? { message: raw } : (raw ?? {});
     throw new ApiError(e.message ?? `HTTP ${res.status}`, e.code ?? "WAVE_UNKNOWN", res.status);
   }
   return data as T;

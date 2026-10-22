@@ -17,12 +17,10 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "bun": "./src/index.ts",
       "default": "./dist/index.js"
     },
     "./server": {
       "types": "./dist/server.d.ts",
-      "bun": "./src/server.ts",
       "default": "./dist/server.js"
     }
   },
@@ -30,11 +28,12 @@
     "dist",
     "studio",
     "native",
+    "scripts/prepare.mjs",
     "scripts/install-native.mjs",
     "README.md"
   ],
   "scripts": {
-    "prepare": "node ../../scripts/prepare-wavedb.mjs",
+    "prepare": "node scripts/prepare.mjs",
     "postinstall": "node scripts/install-native.mjs",
     "build": "tsc -p tsconfig.build.json",
     "build:native": "node ../../scripts/build-native.mjs",

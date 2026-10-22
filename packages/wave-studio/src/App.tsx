@@ -34,14 +34,11 @@ export function App() {
   }, []);
 
   const resolveGate = useCallback(async (): Promise<Gate> => {
-    try {
-      const st = await authApi.status();
-      if (st.auth === false || st.phase === "ready") return "ok";
-      if (st.phase === "setup") return "setup";
-      return "login";
-    } catch {
-      return "ok";
-    }
+    const st = await authApi.status();
+    if (st.auth === false) return "ok";
+    if (st.phase === "ready") return "ok";
+    if (st.phase === "setup") return "setup";
+    return "login";
   }, []);
 
   const refresh = useCallback(async () => {
@@ -52,17 +49,29 @@ export function App() {
       setVersion((v) => v + 1);
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
-        const next = await resolveGate();
-        setGate(next === "ok" ? "token" : next);
+        try {
+          const st = await authApi.status();
+          if (st.auth === false) setGate("token");
+          else if (st.phase === "setup") setGate("setup");
+          else setGate("login");
+        } catch (err) {
+          setError((err as Error).message);
+          setGate("setup");
+        }
       } else setError((e as Error).message);
     }
   }, [resolveGate]);
 
   useEffect(() => {
     void (async () => {
-      const g = await resolveGate();
-      setGate(g);
-      if (g === "ok") void refresh();
+      try {
+        const g = await resolveGate();
+        setGate(g);
+        if (g === "ok") void refresh();
+      } catch (err) {
+        setError((err as Error).message);
+        setGate("setup");
+      }
     })();
   }, [resolveGate, refresh]);
 

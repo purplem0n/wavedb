@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "start": "bun run src/index.ts",
+    "test:studio": "bun run scripts/test-studio-embed.ts",
+    "test:studio:npm": "bun run scripts/test-studio-npm-install.ts",
     "seed": "bun run scripts/seed.ts",
     "seed:force": "bun run scripts/seed.ts --force",
     "seed:small": "bun run scripts/seed-small.ts",
