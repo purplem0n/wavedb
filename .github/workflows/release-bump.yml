@@ -56,22 +56,58 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         if: steps.gate.outputs.proceed == 'true'
 
-      - name: Bump version
+      - name: Fetch tags
         if: steps.gate.outputs.proceed == 'true'
+        run: git fetch --tags origin
+
+      - name: Align package.json with existing tag (if behind)
+        if: steps.gate.outputs.proceed == 'true'
+        id: align
+        run: node scripts/bump-version.mjs --align-only
+
+      - name: Push align commit and move tag to HEAD
+        if: steps.gate.outputs.proceed == 'true' && steps.align.outputs.aligned == 'true'
+        run: |
+          set -euo pipefail
+          v="${{ steps.align.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json packages/*/package.json
+          git commit -m "chore(release): align package versions with v${v} [skip ci]"
+          git tag -fa "v${v}" -m "Release v${v}"
+          git push origin main
+          git push origin "refs/tags/v${v}" --force
+
+      - name: Bump version
+        if: steps.gate.outputs.proceed == 'true' && steps.align.outputs.aligned != 'true'
         id: bump
         env:
           BUMP: ${{ github.event_name == 'workflow_dispatch' && inputs.bump || 'patch' }}
         run: node scripts/bump-version.mjs
 
       - name: Commit, tag, and push
-        if: steps.gate.outputs.proceed == 'true'
+        if: steps.gate.outputs.proceed == 'true' && steps.align.outputs.aligned != 'true'
         run: |
           set -euo pipefail
           v="${{ steps.bump.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json packages/*/package.json
+          git diff --staged --quiet && { echo "Nothing to commit"; exit 0; }
           git commit -m "chore(release): v${v} [skip ci]"
-          git tag "v${v}"
+          if git rev-parse "v${v}" >/dev/null 2>&1; then
+            tip="$(git rev-parse HEAD)"
+            existing="$(git rev-parse "v${v}^{commit}")"
+            if [ "$existing" = "$tip" ]; then
+              echo "Tag v${v} already on HEAD"
+            else
+              echo "Moving tag v${v} to release commit"
+              git tag -fa "v${v}" -m "Release v${v}"
+            fi
+          else
+            git tag -a "v${v}" -m "Release v${v}"
+          fi
           git push origin main
-          git push origin "v${v}"
+          if git rev-parse "v${v}^{commit}" | grep -q .; then
+            git push origin "refs/tags/v${v}" --force-with-lease || git push origin "refs/tags/v${v}" --force
+          fi

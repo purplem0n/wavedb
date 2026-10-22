@@ -1,8 +1,8 @@
 {
   "name": "wavedb-monorepo",
   "private": true,
-  "version": "0.1.0",
-  "description": "WaveDB \u2014 a concurrent-write embedded relational database for TypeScript (Node + Bun)",
+  "version": "0.1.1",
+  "description": "WaveDB — a concurrent-write embedded relational database for TypeScript (Node + Bun)",
   "workspaces": [
     "packages/*",
     "examples/*"

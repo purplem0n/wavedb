@@ -1,11 +1,20 @@
 {
   "name": "@purplemon/wavedb-win32-x64",
-  "publishConfig": { "access": "public" },
-  "version": "0.1.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "version": "0.1.1",
   "description": "WaveDB native addon for Windows x64",
   "license": "MIT",
-  "os": ["win32"],
-  "cpu": ["x64"],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
   "main": "index.js",
-  "files": ["index.js", "wave.win32-x64.node"]
+  "files": [
+    "index.js",
+    "wave.win32-x64.node"
+  ]
 }

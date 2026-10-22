@@ -1,6 +1,8 @@
 // Bump semver across monorepo packages. Patch auto-increments; at patch > 100 → patch 0, minor +1.
-// Major (and optional minor) via BUMP=major|minor or --major / --minor.
+// Baseline = max(package.json, latest v* git tag) so tags and manifests stay aligned.
+// --align-only: if package.json is behind the latest tag, set versions to the tag (no increment).
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,17 +22,32 @@ const versionPaths = [
 ];
 
 function parseArgs() {
-  if (process.argv.includes("--major")) return "major";
-  if (process.argv.includes("--minor")) return "minor";
+  const alignOnly = process.argv.includes("--align-only");
+  if (process.argv.includes("--major")) return { bump: "major", alignOnly };
+  if (process.argv.includes("--minor")) return { bump: "minor", alignOnly };
   const env = process.env.BUMP?.toLowerCase();
-  if (env === "major" || env === "minor" || env === "patch") return env;
-  return "patch";
+  const bump =
+    env === "major" || env === "minor" || env === "patch" ? env : "patch";
+  return { bump, alignOnly };
 }
 
 function parseSemver(v) {
   const m = /^(\d+)\.(\d+)\.(\d+)(?:-.+)?$/.exec(v);
   if (!m) throw new Error(`Invalid semver: ${v}`);
   return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+function semverCompare(a, b) {
+  const pa = parseSemver(a);
+  const pb = parseSemver(b);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] - pb[i];
+  }
+  return 0;
+}
+
+function semverMax(a, b) {
+  return semverCompare(a, b) >= 0 ? a : b;
 }
 
 function nextVersion(current, bump) {
@@ -46,6 +63,21 @@ function nextVersion(current, bump) {
   return `${major}.${mi}.${p}`;
 }
 
+function getLatestTagVersion() {
+  const r = spawnSync("git", ["tag", "-l", "v*", "--sort=-v:refname"], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  if (r.status !== 0) return null;
+  for (const line of r.stdout.trim().split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("v")) continue;
+    const v = t.slice(1);
+    if (/^\d+\.\d+\.\d+$/.test(v)) return v;
+  }
+  return null;
+}
+
 function readJson(rel) {
   const path = join(root, rel);
   return { path, data: JSON.parse(readFileSync(path, "utf8")) };
@@ -55,26 +87,67 @@ function writeJson({ path, data }) {
   writeFileSync(path, JSON.stringify(data, null, 2) + "\n");
 }
 
-const bump = parseArgs();
-const dryRun = process.argv.includes("--dry-run");
-const source = readJson("packages/wavedb/package.json");
-const current = source.data.version;
-const next = nextVersion(current, bump);
+function writeVersionToAll(version) {
+  for (const rel of versionPaths) {
+    const j = readJson(rel);
+    j.data.version = version;
+    writeJson(j);
+  }
+}
 
-if (dryRun) {
-  console.log(`${current} -> ${next} (${bump})`);
+function githubOut(pairs) {
+  const outFile = process.env.GITHUB_OUTPUT;
+  if (!outFile) return;
+  for (const [k, v] of pairs) {
+    appendFileSync(outFile, `${k}=${v}\n`);
+  }
+}
+
+const dryRun = process.argv.includes("--dry-run");
+const { bump, alignOnly } = parseArgs();
+const pkgVersion = readJson("packages/wavedb/package.json").data.version;
+const tagVersion = getLatestTagVersion();
+const released = tagVersion
+  ? semverMax(pkgVersion, tagVersion)
+  : pkgVersion;
+
+if (alignOnly) {
+  if (!tagVersion || semverCompare(pkgVersion, tagVersion) >= 0) {
+    if (dryRun) console.log("align: already in sync");
+    githubOut([
+      ["aligned", "false"],
+      ["version", pkgVersion],
+    ]);
+    process.exit(0);
+  }
+  if (dryRun) {
+    console.log(`align: ${pkgVersion} -> ${tagVersion}`);
+    process.exit(0);
+  }
+  writeVersionToAll(tagVersion);
+  console.log(`Aligned package.json ${pkgVersion} -> ${tagVersion} (tag v${tagVersion})`);
+  githubOut([
+    ["aligned", "true"],
+    ["version", tagVersion],
+  ]);
   process.exit(0);
 }
 
-for (const rel of versionPaths) {
-  const j = readJson(rel);
-  j.data.version = next;
-  writeJson(j);
+const next = nextVersion(released, bump);
+
+if (dryRun) {
+  console.log(
+    `pkg=${pkgVersion} tag=${tagVersion ?? "none"} baseline=${released} -> ${next} (${bump})`,
+  );
+  process.exit(0);
 }
 
-console.log(`Bumped ${current} -> ${next} (${bump})`);
+writeVersionToAll(next);
+console.log(
+  `Bumped baseline ${released} -> ${next} (${bump}) [pkg=${pkgVersion}, tag=${tagVersion ?? "none"}]`,
+);
 
-const outFile = process.env.GITHUB_OUTPUT;
-if (outFile) {
-  appendFileSync(outFile, `version=${next}\n`);
-}
+githubOut([
+  ["aligned", "false"],
+  ["version", next],
+]);
