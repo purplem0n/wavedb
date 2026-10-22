@@ -1,6 +1,6 @@
 {
   "name": "@purplemon/wave-cli",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "The `wave` command line: studio, serve, sql, schema push/diff, export/import",
   "type": "module",
   "license": "MIT",
