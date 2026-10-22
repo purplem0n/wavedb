@@ -1,5 +1,5 @@
 // HTTP server: exposes a Database to other processes (multi-process access, Studio, remote clients).
-// Node + Bun compatible (uses node:http).
+// Node + Bun compatible (uses node:http + Web Fetch handler for embedding).
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -8,24 +8,44 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { WaveError, mapNativeError } from "./errors.ts";
 import type { Database, TxBackend } from "./db.ts";
 import { acquireLeaderLease, startLeaderRenewal, type LeaderLease } from "./leader.ts";
+import { initWaveAuth, normalizePrefix, type WaveAuth } from "./auth.ts";
 
-export interface ServeOptions {
-  port?: number;
-  host?: string;
-  /** Path to database directory (for leader lease). */
+export interface HandlerOptions {
+  /** Path to database directory (leader lease + superuser auth). */
   dataPath?: string;
   /** Acquire/renew a leader lease under `dataPath/.wave/leader.json`. */
   leader?: boolean;
   /** If leader acquisition fails, start HTTP in standby mode (503 on /api/run). */
   standby?: boolean;
-  /** require `Authorization: Bearer <token>` on /api/* */
+  /** Static bearer for M2M clients (`Authorization: Bearer`). */
   token?: string;
-  /** directory with a built single-page app (e.g. Wave Studio) served at `/` */
+  /** Enable superuser auth (default: true when `dataPath` is set, else false). */
+  auth?: boolean;
+  /** URL prefix for API routes (default `/api`). Embedded: `/__wave/api`. */
+  apiPrefix?: string;
+  /** URL prefix for Studio static files (default `/`). Embedded: `/studio`. */
+  staticPrefix?: string;
+  /** Built Wave Studio `dist/` directory. */
   staticDir?: string;
-  /** roll back remote transactions idle for this long (default 30s) */
+  /** Inject runtime API prefix into Studio via `config.js` (default true when staticPrefix !== `/`). */
+  studioConfig?: boolean;
   txIdleMs?: number;
-  /** send permissive CORS headers (dev) */
   cors?: boolean;
+}
+
+export interface ServeOptions extends HandlerOptions {
+  port?: number;
+  host?: string;
+}
+
+export interface WaveHandler {
+  fetch(request: Request): Promise<Response>;
+  nodeListener(req: IncomingMessage, res: ServerResponse): void;
+  close(): Promise<void>;
+  /** Resolved API prefix (e.g. `/api` or `/__wave/api`). */
+  apiPrefix: string;
+  /** Resolved static prefix (e.g. `/` or `/studio`). */
+  staticPrefix: string;
 }
 
 export interface WaveServer {
@@ -33,6 +53,7 @@ export interface WaveServer {
   port: number;
   host: string;
   server: Server;
+  handler: WaveHandler;
   close(): Promise<void>;
 }
 
@@ -48,22 +69,6 @@ const MIME: Record<string, string> = {
   ".map": "application/json",
   ".woff2": "font/woff2",
 };
-
-async function readBody(req: IncomingMessage, limit = 64 * 1024 * 1024): Promise<any> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const c of req) {
-    size += (c as Buffer).length;
-    if (size > limit) throw new WaveError("request body too large", "WAVE_INVALID");
-    chunks.push(c as Buffer);
-  }
-  if (size === 0) return {};
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  } catch {
-    throw new WaveError("invalid JSON body", "WAVE_INVALID");
-  }
-}
 
 function statusFor(code: string): number {
   switch (code) {
@@ -81,14 +86,109 @@ function statusFor(code: string): number {
   }
 }
 
-export async function serve(db: Database<any>, opts: ServeOptions = {}): Promise<WaveServer> {
-  const host = opts.host ?? "127.0.0.1";
+async function readJsonBody(req: IncomingMessage, limit = 64 * 1024 * 1024): Promise<any> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const c of req) {
+    size += (c as Buffer).length;
+    if (size > limit) throw new WaveError("request body too large", "WAVE_INVALID");
+    chunks.push(c as Buffer);
+  }
+  if (size === 0) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    throw new WaveError("invalid JSON body", "WAVE_INVALID");
+  }
+}
+
+async function readRequestJson(request: Request, limit = 64 * 1024 * 1024): Promise<any> {
+  const text = await request.text();
+  if (!text) return {};
+  if (text.length > limit) throw new WaveError("request body too large", "WAVE_INVALID");
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new WaveError("invalid JSON body", "WAVE_INVALID");
+  }
+}
+
+function jsonResponse(status: number, body: unknown, headers?: Record<string, string>): Response {
+  const h = { "content-type": "application/json", ...headers };
+  return new Response(JSON.stringify(body), { status, headers: h });
+}
+
+function toInternalApiPath(pathname: string, apiPrefix: string): string | undefined {
+  const p = normalizePrefix(apiPrefix || "/api");
+  if (p) {
+    if (pathname === p) return "/api";
+    if (!pathname.startsWith(p + "/")) return undefined;
+    const rest = pathname.slice(p.length);
+    return "/api" + rest;
+  }
+  if (pathname === "/api" || pathname.startsWith("/api/")) return pathname;
+  return undefined;
+}
+
+function staticRelPath(pathname: string, staticPrefix: string): string | undefined {
+  const p = normalizePrefix(staticPrefix);
+  if (!p) return pathname;
+  if (pathname === p || pathname === p + "/") return "";
+  if (!pathname.startsWith(p + "/")) return undefined;
+  return pathname.slice(p.length + 1);
+}
+
+/** Vite `base: "./"` breaks under `/studio` without a trailing slash; fix at serve time. */
+function embedStudioIndex(html: string, staticPrefix: string, apiPrefix: string): string {
+  const base = `${normalizePrefix(staticPrefix)}/`;
+  const prefix = normalizePrefix(apiPrefix) || "/api";
+  const boot = `<script>window.__WAVE_API_PREFIX__=${JSON.stringify(prefix)};</script>`;
+  let out = html;
+  if (!/<base\s/i.test(out)) {
+    if (/<head[\s>]/i.test(out)) {
+      out = out.replace(/<head(\s[^>]*)?>/i, (m) => `${m}\n    <base href="${base}">`);
+    } else {
+      out = out.replace(/<html(\s[^>]*)?>/i, (m) => `${m}\n  <head>\n    <base href="${base}">\n  </head>`);
+    }
+  }
+  out = out.replace(/<script src="[^"]*config\.js"><\/script>\s*/gi, "");
+  if (!out.includes("__WAVE_API_PREFIX__")) {
+    const inject = `${boot}\n    <script src="${base}config.js"></script>\n    `;
+    if (/<script type="module"/i.test(out)) {
+      out = out.replace(/<script type="module"/i, `${inject}<script type="module"`);
+    } else if (/<base\s/i.test(out)) {
+      out = out.replace(/<base href="[^"]*">/i, (m) => `${m}\n    ${inject}`);
+    } else if (/<head[\s>]/i.test(out)) {
+      out = out.replace(/<head(\s[^>]*)?>/i, (m) => `${m}\n    ${inject}`);
+    }
+  }
+  return out;
+}
+
+function isHttps(request: Request | IncomingMessage): boolean {
+  if ("headers" in request && typeof (request as IncomingMessage).headers?.["x-forwarded-proto"] === "string") {
+    return (request as IncomingMessage).headers["x-forwarded-proto"] === "https";
+  }
+  if (request instanceof Request) {
+    return new URL(request.url).protocol === "https:";
+  }
+  return false;
+}
+
+export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}): WaveHandler {
   const idleMs = opts.txIdleMs ?? 30_000;
-  const txs = new Map<string, { tx: TxBackend; timer: ReturnType<typeof setTimeout> }>();
   const staticDir = opts.staticDir ? resolve(opts.staticDir) : undefined;
+  const apiPrefix = normalizePrefix(opts.apiPrefix ?? "/api") || "/api";
+  const staticPrefix = opts.staticPrefix ?? "/";
+  const authEnabled = opts.auth ?? !!opts.dataPath;
+  const waveAuth: WaveAuth | undefined =
+    authEnabled && opts.dataPath ? initWaveAuth(resolve(opts.dataPath), { machineToken: opts.token }) : undefined;
+
+  const txs = new Map<string, { tx: TxBackend; timer: ReturnType<typeof setTimeout> }>();
   let stopLeader: (() => void) | undefined;
   let leader: LeaderLease | undefined;
   let active = true;
+
   if (opts.leader && opts.dataPath) {
     const got = acquireLeaderLease({ dataPath: opts.dataPath, token: opts.token });
     if (!got.ok) {
@@ -112,7 +212,8 @@ export async function serve(db: Database<any>, opts: ServeOptions = {}): Promise
     return e;
   };
 
-  const authorized = (req: IncomingMessage): boolean => {
+  const legacyAuthorized = (req: IncomingMessage): boolean => {
+    if (waveAuth) return waveAuth.authorize(req);
     if (!opts.token) return true;
     const h = req.headers.authorization ?? "";
     const given = Buffer.from(h.startsWith("Bearer ") ? h.slice(7) : "");
@@ -120,34 +221,90 @@ export async function serve(db: Database<any>, opts: ServeOptions = {}): Promise
     return given.length === want.length && timingSafeEqual(given, want);
   };
 
-  const json = (res: ServerResponse, status: number, body: unknown) => {
-    const text = JSON.stringify(body);
-    res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(text) });
-    res.end(text);
+  const legacyAuthorizedFetch = (request: Request): boolean => {
+    if (waveAuth) {
+      const fake = { headers: { cookie: request.headers.get("cookie") ?? undefined, authorization: request.headers.get("authorization") ?? undefined } } as IncomingMessage;
+      return waveAuth.authorize(fake);
+    }
+    if (!opts.token) return true;
+    const h = request.headers.get("authorization") ?? "";
+    const given = Buffer.from(h.startsWith("Bearer ") ? h.slice(7) : "");
+    const want = Buffer.from(opts.token);
+    return given.length === want.length && timingSafeEqual(given, want);
   };
 
-  async function api(req: IncomingMessage, res: ServerResponse, path: string) {
-    const method = req.method ?? "GET";
-    if (method === "GET" && path === "/api/ping") return json(res, 200, { ok: true });
+  const isPublicApi = (path: string) =>
+    path === "/api/ping" ||
+    path === "/api/health" ||
+    path === "/api/auth/status" ||
+    path === "/api/auth/setup" ||
+    path === "/api/auth/login" ||
+    path === "/api/auth/logout";
+
+  async function handleApi(method: string, path: string, body: any, reqLike: IncomingMessage | Request): Promise<Response> {
+    const secure = isHttps(reqLike as Request);
+    const req =
+      reqLike instanceof Request
+        ? ({ headers: { cookie: reqLike.headers.get("cookie") ?? undefined, authorization: reqLike.headers.get("authorization") ?? undefined } } as IncomingMessage)
+        : reqLike;
+
+    if (method === "GET" && path === "/api/ping") return jsonResponse(200, { ok: true });
     if (method === "GET" && path === "/api/health")
-      return json(res, active ? 200 : 503, { ok: active, leader: leader ?? null, standby: !active });
-    if (!active) return json(res, 503, { error: { code: "WAVE_INVALID", message: "standby: not leader" } });
-    if (!authorized(req)) return json(res, 401, { error: { code: "WAVE_INVALID", message: "unauthorized" } });
-    if (method === "GET" && (path === "/api/tables" || path === "/api/schema")) return json(res, 200, await db.tables());
-    if (method === "GET" && path === "/api/stats") return json(res, 200, await db.stats());
-    if (method !== "POST") return json(res, 404, { error: { code: "WAVE_NOT_FOUND", message: "no such endpoint" } });
-    const body = await readBody(req);
+      return jsonResponse(active ? 200 : 503, { ok: active, leader: leader ?? null, standby: !active });
+    if (method === "GET" && path === "/api/auth/status") {
+      if (!waveAuth) return jsonResponse(200, { phase: "ready", auth: false });
+      return jsonResponse(200, { ...waveAuth.status(req), auth: true, apiPrefix: apiPrefix || "/api" });
+    }
+    if (method === "POST" && path === "/api/auth/setup") {
+      if (!waveAuth) return jsonResponse(400, { error: { code: "WAVE_INVALID", message: "auth disabled" } });
+      try {
+        const password = String(body.password ?? "");
+        waveAuth.setup(password);
+        const token = waveAuth.login(password);
+        return jsonResponse(200, { ok: true, token }, { "set-cookie": waveAuth.sessionCookie(token, secure) });
+      } catch (e) {
+        return jsonResponse(400, { error: { code: "WAVE_INVALID", message: (e as Error).message } });
+      }
+    }
+    if (method === "POST" && path === "/api/auth/login") {
+      if (!waveAuth) return jsonResponse(400, { error: { code: "WAVE_INVALID", message: "auth disabled" } });
+      try {
+        const token = waveAuth.login(String(body.password ?? ""));
+        return jsonResponse(200, { ok: true, token }, { "set-cookie": waveAuth.sessionCookie(token, secure) });
+      } catch {
+        return jsonResponse(401, { error: { code: "WAVE_INVALID", message: "invalid password" } });
+      }
+    }
+    if (method === "POST" && path === "/api/auth/logout") {
+      if (!waveAuth) return jsonResponse(200, { ok: true });
+      return jsonResponse(200, { ok: true }, { "set-cookie": waveAuth.clearCookie(secure) });
+    }
+    if (method === "GET" && path === "/api/auth/me") {
+      if (!waveAuth) return jsonResponse(200, { ok: true, auth: false });
+      return jsonResponse(waveAuth.authorize(req) ? 200 : 401, waveAuth.authorize(req) ? { ok: true } : { error: { code: "WAVE_INVALID", message: "unauthorized" } });
+    }
+
+    if (!active) return jsonResponse(503, { error: { code: "WAVE_INVALID", message: "standby: not leader" } });
+    if (!isPublicApi(path)) {
+      const ok = reqLike instanceof Request ? legacyAuthorizedFetch(reqLike) : legacyAuthorized(reqLike);
+      if (!ok) return jsonResponse(401, { error: { code: "WAVE_INVALID", message: "unauthorized" } });
+    }
+
+    if (method === "GET" && (path === "/api/tables" || path === "/api/schema")) return jsonResponse(200, await db.tables());
+    if (method === "GET" && path === "/api/stats") return jsonResponse(200, await db.stats());
+    if (method !== "POST") return jsonResponse(404, { error: { code: "WAVE_NOT_FOUND", message: "no such endpoint" } });
+
     if (path === "/api/run") {
       const target = body.tx ? touch(String(body.tx)).tx.exec : db.backend.exec;
       const r = body.sql !== undefined ? await target.runSql(String(body.sql), body.params ?? []) : await target.run(body.stmt);
-      return json(res, 200, r);
+      return jsonResponse(200, r);
     }
     if (path === "/api/tx/begin") {
       const tx = await db.backend.begin(body.isolation === "serializable" ? "serializable" : "snapshot");
       const id = randomUUID();
       txs.set(id, { tx, timer: setTimeout(() => {}, 0) });
       touch(id);
-      return json(res, 200, { id });
+      return jsonResponse(200, { id });
     }
     const m = /^\/api\/tx\/([^/]+)\/(commit|rollback)$/.exec(path);
     if (m) {
@@ -155,71 +312,191 @@ export async function serve(db: Database<any>, opts: ServeOptions = {}): Promise
       const e = touch(id);
       clearTimeout(e.timer);
       txs.delete(id);
-      if (m[2] === "commit") return json(res, 200, await e.tx.commit());
+      if (m[2] === "commit") return jsonResponse(200, await e.tx.commit());
       await e.tx.rollback();
-      return json(res, 200, { ok: true });
+      return jsonResponse(200, { ok: true });
     }
-    if (path === "/api/vacuum") return json(res, 200, { removed: await db.vacuum() });
+    if (path === "/api/vacuum") return jsonResponse(200, { removed: await db.vacuum() });
     if (path === "/api/compact") {
       await db.compact();
-      return json(res, 200, { ok: true });
+      return jsonResponse(200, { ok: true });
     }
-    return json(res, 404, { error: { code: "WAVE_NOT_FOUND", message: "no such endpoint" } });
+    return jsonResponse(404, { error: { code: "WAVE_NOT_FOUND", message: "no such endpoint" } });
   }
 
-  function serveStatic(res: ServerResponse, urlPath: string) {
+  function serveStaticFile(rel: string): Response {
     if (!staticDir) {
-      res.writeHead(404, { "content-type": "text/plain" });
-      return res.end("WaveDB server. Use /api/*");
+      return new Response("WaveDB server. Use API routes.", { status: 404, headers: { "content-type": "text/plain" } });
     }
-    let rel = normalize(decodeURIComponent(urlPath)).replace(/^([/\\])+/, "");
-    let file = join(staticDir, rel);
+    const injectConfig = opts.studioConfig !== false && normalizePrefix(staticPrefix) && rel === "config.js";
+    if (injectConfig) {
+      const prefix = apiPrefix || "/api";
+      const js = `window.__WAVE_API_PREFIX__=${JSON.stringify(prefix)};\n`;
+      return new Response(js, { status: 200, headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" } });
+    }
+    let fileRel = normalize(decodeURIComponent(rel)).replace(/^([/\\])+/, "");
+    let file = join(staticDir, fileRel);
     if (file !== staticDir && !file.startsWith(staticDir + sep)) {
-      res.writeHead(403);
-      return res.end();
+      return new Response(null, { status: 403 });
     }
     if (!existsSync(file) || statSync(file).isDirectory()) {
-      // SPA fallback
-      if (extname(rel)) {
-        res.writeHead(404);
-        return res.end("not found");
-      }
+      if (extname(fileRel)) return new Response("not found", { status: 404 });
       file = join(staticDir, "index.html");
-      if (!existsSync(file)) {
-        res.writeHead(404);
-        return res.end("studio not built");
-      }
+      if (!existsSync(file)) return new Response("studio not built", { status: 404 });
     }
-    const data = readFileSync(file);
-    res.writeHead(200, {
-      "content-type": MIME[extname(file)] ?? "application/octet-stream",
-      "cache-control": file.includes("/assets/") ? "public, max-age=31536000, immutable" : "no-cache",
+    let data = readFileSync(file);
+    if (file.endsWith(`${sep}index.html`) && normalizePrefix(staticPrefix)) {
+      data = Buffer.from(embedStudioIndex(data.toString("utf8"), staticPrefix, apiPrefix || "/api"), "utf8");
+    }
+    return new Response(data, {
+      status: 200,
+      headers: {
+        "content-type": MIME[extname(file)] ?? "application/octet-stream",
+        "cache-control": file.includes(`${sep}assets${sep}`) ? "public, max-age=31536000, immutable" : "no-cache",
+      },
     });
-    res.end(data);
   }
 
-  const server = createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://x");
+  async function dispatch(request: Request): Promise<Response | null> {
+    const url = new URL(request.url);
+    let pathname = url.pathname;
+
     if (opts.cors) {
-      res.setHeader("access-control-allow-origin", "*");
-      res.setHeader("access-control-allow-headers", "authorization, content-type");
-      res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
-      if (req.method === "OPTIONS") {
-        res.writeHead(204);
-        return res.end();
+      if (request.method === "OPTIONS") {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            "access-control-allow-origin": "*",
+            "access-control-allow-headers": "authorization, content-type",
+            "access-control-allow-methods": "GET, POST, OPTIONS",
+          },
+        });
       }
     }
-    if (url.pathname.startsWith("/api/")) {
-      api(req, res, url.pathname).catch((e) => {
+
+    const studioMount = normalizePrefix(staticPrefix);
+    if (request.method === "GET" && studioMount && pathname === studioMount) {
+      const target = new URL(request.url);
+      target.pathname = `${studioMount}/`;
+      return Response.redirect(target, 308);
+    }
+
+    const apiPath = toInternalApiPath(pathname, apiPrefix);
+    if (apiPath) {
+      try {
+        const body = request.method === "POST" ? await readRequestJson(request) : {};
+        const res = await handleApi(request.method ?? "GET", apiPath, body, request);
+        if (opts.cors) {
+          const h = new Headers(res.headers);
+          h.set("access-control-allow-origin", "*");
+          return new Response(res.body, { status: res.status, headers: h });
+        }
+        return res;
+      } catch (e) {
         const err = mapNativeError(e);
         const code = err instanceof WaveError ? err.code : "WAVE_UNKNOWN";
-        if (!res.headersSent) json(res, statusFor(code), { error: { code, message: err.message } });
-        else res.end();
-      });
-    } else {
-      serveStatic(res, url.pathname);
+        return jsonResponse(statusFor(code), { error: { code, message: err.message } });
+      }
     }
-  });
+
+    const staticRel = staticRelPath(pathname, staticPrefix);
+    if (staticRel !== undefined) {
+      return serveStaticFile(staticRel);
+    }
+
+    // Standalone: root `/` serves studio when staticPrefix is `/`
+    if (!normalizePrefix(staticPrefix) && (pathname === "/" || pathname === "")) {
+      return serveStaticFile("");
+    }
+
+    return null;
+  }
+
+  const handler: WaveHandler = {
+    apiPrefix: apiPrefix || "/api",
+    staticPrefix,
+    async fetch(request: Request) {
+      const res = await dispatch(request);
+      return res ?? new Response(null, { status: 404 });
+    },
+    nodeListener(req, res) {
+      const url = new URL(req.url ?? "/", "http://x");
+      const run = async () => {
+        if (opts.cors) {
+          res.setHeader("access-control-allow-origin", "*");
+          res.setHeader("access-control-allow-headers", "authorization, content-type");
+          res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
+          if (req.method === "OPTIONS") {
+            res.writeHead(204);
+            return res.end();
+          }
+        }
+        const apiPath = toInternalApiPath(url.pathname, apiPrefix);
+        if (apiPath) {
+          try {
+            const body = req.method === "POST" ? await readJsonBody(req) : {};
+            const response = await handleApi(req.method ?? "GET", apiPath, body, req);
+            const text = await response.text();
+            const headers: Record<string, string> = {};
+            response.headers.forEach((v, k) => {
+              headers[k] = v;
+            });
+            res.writeHead(response.status, headers);
+            return res.end(text);
+          } catch (e) {
+            const err = mapNativeError(e);
+            const code = err instanceof WaveError ? err.code : "WAVE_UNKNOWN";
+            const text = JSON.stringify({ error: { code, message: err.message } });
+            if (!res.headersSent) {
+              res.writeHead(statusFor(code), { "content-type": "application/json" });
+              return res.end(text);
+            }
+            return res.end();
+          }
+        }
+        const staticRel = staticRelPath(url.pathname, staticPrefix);
+        if (staticRel !== undefined || (!normalizePrefix(staticPrefix) && url.pathname === "/")) {
+          const response = serveStaticFile(staticRel ?? "");
+          const buf = Buffer.from(await response.arrayBuffer());
+          const headers: Record<string, string> = {};
+          response.headers.forEach((v, k) => {
+            headers[k] = v;
+          });
+          res.writeHead(response.status, headers);
+          return res.end(buf);
+        }
+        res.writeHead(404);
+        res.end();
+      };
+      void run();
+    },
+    async close() {
+      stopLeader?.();
+      for (const [id, e] of txs) {
+        clearTimeout(e.timer);
+        await Promise.resolve(e.tx.rollback()).catch(() => {});
+        txs.delete(id);
+      }
+    },
+  };
+
+  return handler;
+}
+
+/** Hono / Connect-style middleware: handles Wave routes, otherwise returns false so caller can `next()`. */
+export function waveMiddleware(handler: WaveHandler): (request: Request) => Promise<Response | undefined> {
+  return async (request) => {
+    const res = await handler.fetch(request);
+    return res.status === 404 ? undefined : res;
+  };
+}
+
+export { waveHost, resolveStudioDist, type WaveHost, type WaveHostOptions } from "./host.ts";
+
+export async function serve(db: Database<any>, opts: ServeOptions = {}): Promise<WaveServer> {
+  const host = opts.host ?? "127.0.0.1";
+  const handler = createWaveHandler(db, { ...opts, auth: opts.auth ?? !!opts.dataPath });
+  const server = createServer(handler.nodeListener);
 
   await new Promise<void>((ok, fail) => {
     server.once("error", fail);
@@ -232,13 +509,9 @@ export async function serve(db: Database<any>, opts: ServeOptions = {}): Promise
     port,
     host,
     server,
+    handler,
     async close() {
-      stopLeader?.();
-      for (const [id, e] of txs) {
-        clearTimeout(e.timer);
-        await Promise.resolve(e.tx.rollback()).catch(() => {});
-        txs.delete(id);
-      }
+      await handler.close();
       await new Promise<void>((ok) => {
         server.close(() => ok());
         (server as any).closeAllConnections?.();

@@ -59,5 +59,16 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "peerDependencies": {
+    "hono": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "hono": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "hono": "^4.13.13"
   }
 }

@@ -110,12 +110,12 @@ describe("wave cli", () => {
 
   test("serve starts an HTTP server other processes can use", async () => {
     const path = join(tmpDir(), "s.wave");
-    const r = await wv(["serve", path, "--port", "0"]);
+    const r = await wv(["serve", path, "--port", "0", "--token", "cli-secret"]);
     expect("running" in r.res).toBe(true);
     if (!("running" in r.res)) return;
     const server = r.res.running;
     const t = table("t", { id: int().autoIncrement(), v: text() });
-    const remote = await connect(server.url, { schema: { t }, push: true });
+    const remote = await connect(server.url, { schema: { t }, push: true, token: "cli-secret" });
     await remote.insert(t).values({ v: "over-http" });
     expect((await remote.select().from(t))[0]!.v).toBe("over-http");
     await server.close();
@@ -127,7 +127,7 @@ describe("wave cli", () => {
     mkdirSync(staticDir);
     writeFileSync(join(staticDir, "index.html"), "<html>studio</html>");
     process.env.WAVE_STUDIO_DIR = staticDir;
-    const r = await wv(["studio", path, "--port", "0"]);
+    const r = await wv(["studio", path, "--port", "0", "--token", "cli-secret"]);
     delete process.env.WAVE_STUDIO_DIR;
     if (!("running" in r.res)) throw new Error("not running");
     const server = r.res.running;
@@ -135,7 +135,8 @@ describe("wave cli", () => {
     expect(await (await fetch(server.url + "/some/route")).text()).toContain("studio"); // SPA fallback
     expect((await fetch(server.url + "/missing.js")).status).toBe(404);
     expect(await (await fetch(server.url + "/..%2f..%2f..%2fetc/passwd")).text()).not.toContain("root:"); // no traversal
-    expect(await (await fetch(server.url + "/api/tables")).json()).toEqual([]);
+    const auth = { headers: { authorization: "Bearer cli-secret" } };
+    expect(await (await fetch(server.url + "/api/tables", auth)).json()).toEqual([]);
     await server.close();
   });
 

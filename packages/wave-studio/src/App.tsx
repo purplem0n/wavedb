@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ApiError, api, getToken, setToken, type TableDef } from "./api";
+import { ApiError, api, authApi, getToken, setToken, type AuthPhase, type TableDef } from "./api";
 import { SchemaView } from "./SchemaView";
 import { Shell } from "./Shell";
 import { SqlConsole } from "./SqlConsole";
@@ -16,35 +16,55 @@ function parseHash(): Route {
   return { page: "schema" };
 }
 
+type Gate = "loading" | "setup" | "login" | "token" | "ok";
+
 export function App() {
   const [route, setRoute] = useState<Route>(parseHash);
   const [tables, setTables] = useState<TableDef[]>([]);
   const [version, setVersion] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [needsToken, setNeedsToken] = useState(false);
+  const [gate, setGate] = useState<Gate>("loading");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [tokenInput, setTokenInput] = useState(getToken());
-
   useEffect(() => {
     const on = () => setRoute(parseHash());
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);
 
+  const resolveGate = useCallback(async (): Promise<Gate> => {
+    try {
+      const st = await authApi.status();
+      if (st.auth === false || st.phase === "ready") return "ok";
+      if (st.phase === "setup") return "setup";
+      return "login";
+    } catch {
+      return "ok";
+    }
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
       setTables(await api.tables());
       setError(null);
-      setNeedsToken(false);
+      setGate("ok");
       setVersion((v) => v + 1);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) setNeedsToken(true);
-      else setError((e as Error).message);
+      if (e instanceof ApiError && e.status === 401) {
+        const next = await resolveGate();
+        setGate(next === "ok" ? "token" : next);
+      } else setError((e as Error).message);
     }
-  }, []);
+  }, [resolveGate]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void (async () => {
+      const g = await resolveGate();
+      setGate(g);
+      if (g === "ok") void refresh();
+    })();
+  }, [resolveGate, refresh]);
 
   const go = (hash: string) => {
     location.hash = hash;
@@ -61,7 +81,91 @@ export function App() {
         : `${{ schema: "Schema", sql: "SQL console", stats: "Stats" }[route.page]} · Wave Studio`;
   }, [route]);
 
-  if (needsToken) {
+  const submitAuth = async (phase: AuthPhase) => {
+    setError(null);
+    try {
+      if (phase === "setup") {
+        if (password.length < 8) {
+          setError("Password must be at least 8 characters.");
+          return;
+        }
+        if (password !== confirm) {
+          setError("Passwords do not match.");
+          return;
+        }
+        await authApi.setup(password);
+      } else {
+        await authApi.login(password);
+      }
+      setPassword("");
+      setConfirm("");
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+
+  if (gate === "loading") {
+    return (
+      <main className="login">
+        <div className="login-card">
+          <WaveLogo className="brand-logo" />
+          <p>Loading…</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (gate === "setup" || gate === "login") {
+    return (
+      <main className="login">
+        <div className="login-card">
+          <h1>
+            <WaveLogo className="brand-logo" />
+            Wave Studio
+          </h1>
+          <p>{gate === "setup" ? "Create the superuser password for this database." : "Sign in to continue."}</p>
+          {error && (
+            <p role="alert" className="alert alert--error">
+              {error}
+            </p>
+          )}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submitAuth(gate);
+            }}
+          >
+            <label htmlFor="password">{gate === "setup" ? "Superuser password" : "Password"}</label>
+            <input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete={gate === "setup" ? "new-password" : "current-password"}
+            />
+            {gate === "setup" && (
+              <>
+                <label htmlFor="confirm">Confirm password</label>
+                <input
+                  id="confirm"
+                  type="password"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  autoComplete="new-password"
+                />
+              </>
+            )}
+            <button type="submit" className="btn-run">
+              {gate === "setup" ? "Create superuser" : "Sign in"}
+            </button>
+          </form>
+        </div>
+      </main>
+    );
+  }
+
+  if (gate === "token") {
     return (
       <main className="login">
         <div className="login-card">
@@ -88,7 +192,7 @@ export function App() {
   }
 
   return (
-    <Shell route={route} tables={tables} connected={!error && !needsToken} onRefresh={() => void refresh()}>
+    <Shell route={route} tables={tables} connected={!error && gate === "ok"} onRefresh={() => void refresh()}>
       {error && (
         <p role="alert" className="alert alert--error">
           {error}

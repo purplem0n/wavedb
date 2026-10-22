@@ -1,11 +1,11 @@
 // Implementation of the `wave` commands. `run()` is pure enough to be unit-tested.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
-import { serve, wave, type TableDefJson, type AnyTable, type Database, type SchemaMap, type WaveServer } from "@purplemon/wavedb";
+import { connect, serve, wave, type TableDefJson, type AnyTable, type Database, type SchemaMap, type WaveServer } from "@purplemon/wavedb";
 
 export interface IO {
   out(s: string): void;
@@ -34,6 +34,11 @@ Usage: wave <command> [path] [options]       (path defaults to ./data.wave)
   compact [path]      Force LSM compaction
   version
 
+Global options (any command): --url U  --token T  --password P
+  --url               Wave HTTP base (e.g. http://127.0.0.1:3000/__wave) when the DB is owned by a running server
+  --token             Bearer token (or WAVE_SERVE_TOKEN) for remote HTTP
+  --password          Superuser password; logs in over HTTP and caches a session token for --url
+
 Options: --durability sync|async   --help
 `;
 
@@ -43,7 +48,7 @@ interface Args {
   flags: Record<string, string | true>;
 }
 
-const BOOL_FLAGS = new Set(["open", "json", "force", "help", "no-open", "cors", "standby", "leader"]);
+const BOOL_FLAGS = new Set(["open", "json", "force", "help", "no-open", "cors", "standby", "leader", "no-auth"]);
 
 export function parseArgs(argv: string[]): Args {
   const [cmd = "help", ...rest] = argv;
@@ -206,6 +211,79 @@ function openUrl(url: string) {
   }
 }
 
+function isLockError(e: unknown): boolean {
+  const msg = String((e as Error)?.message ?? e).toLowerCase();
+  return msg.includes("lock") || msg.includes("already open") || msg.includes("resource busy") || msg.includes("would block");
+}
+
+function cliSessionPath(url: string): string {
+  const hash = Buffer.from(url).toString("base64url").slice(0, 32);
+  return join(process.cwd(), ".wave", `cli-${hash}.json`);
+}
+
+async function loginRemoteToken(base: string, password: string): Promise<string> {
+  const root = base.replace(/\/+$/, "");
+  const res = await fetch(`${root}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { token?: string; error?: { message?: string } };
+  if (!res.ok) throw new Error(data.error?.message ?? `login failed (${res.status})`);
+  if (!data.token) throw new Error("login did not return a session token");
+  return data.token;
+}
+
+async function resolveRemoteToken(base: string, flags: Record<string, string | true>): Promise<string | undefined> {
+  if (typeof flags.token === "string") return flags.token;
+  if (process.env.WAVE_SERVE_TOKEN) return process.env.WAVE_SERVE_TOKEN;
+  const cache = cliSessionPath(base);
+  if (existsSync(cache)) {
+    try {
+      const j = JSON.parse(readFileSync(cache, "utf8")) as { token?: string };
+      if (j.token) return j.token;
+    } catch {
+      /* ignore */
+    }
+  }
+  if (typeof flags.password === "string") {
+    const token = await loginRemoteToken(base, flags.password);
+    mkdirSync(dirname(cache), { recursive: true });
+    writeFileSync(cache, JSON.stringify({ token, url: base }), { mode: 0o600 });
+    return token;
+  }
+  return undefined;
+}
+
+async function openCliDb(
+  path: string,
+  flags: Record<string, string | true>,
+  schema: SchemaMap | undefined,
+  push: boolean,
+  durability: "async" | "sync" | undefined,
+): Promise<{ db: Database<any>; close: () => Promise<void> }> {
+  const url = (typeof flags.url === "string" ? flags.url : undefined) ?? process.env.WAVE_URL;
+  if (url) {
+    const token = await resolveRemoteToken(url, flags);
+    const db = await connect(url, { schema, token, push });
+    return { db, close: () => db.close() };
+  }
+  try {
+    const db = await wave(path, { schema, durability, push });
+    return { db, close: () => db.close() };
+  } catch (e) {
+    if (isLockError(e) && process.env.WAVE_URL) {
+      const token = await resolveRemoteToken(process.env.WAVE_URL, flags);
+      const db = await connect(process.env.WAVE_URL, { schema, token, push });
+      return { db, close: () => db.close() };
+    }
+    if (isLockError(e)) {
+      throw new Error("Database is in use by another process. Use --url or WAVE_URL, or stop the server.");
+    }
+    throw e;
+  }
+}
+
 function withDb(server: WaveServer, db: Database<any>): WaveServer {
   return {
     ...server,
@@ -231,12 +309,13 @@ export async function run(argv: string[], io: IO): Promise<RunResult> {
   const durability = flags.durability === "async" ? "async" : undefined;
   const schema = typeof flags.schema === "string" ? await loadSchema(flags.schema) : undefined;
 
-  const open = (push: boolean) => wave(path, { schema, durability, push });
+  const openLocal = (push: boolean) => wave(path, { schema, durability, push });
+  const open = (push: boolean) => openCliDb(path, flags, schema, push, durability);
 
   switch (cmd) {
     case "studio":
     case "dev": {
-      const db = await open(cmd === "dev" || !!schema);
+      const db = await openLocal(cmd === "dev" || !!schema);
       const dir = studioDir();
       if (!dir) {
         io.err("Wave Studio is not built. Run: bun run --filter wave-studio build\n");
@@ -248,19 +327,22 @@ export async function run(argv: string[], io: IO): Promise<RunResult> {
         token: typeof flags.token === "string" ? flags.token : undefined,
         staticDir: dir,
         cors: !!flags.cors,
+        dataPath: resolve(path),
+        auth: !flags["no-auth"],
       });
       io.out(`Wave Studio  ${server.url}${flags.token ? "  (token required)" : ""}\nDatabase     ${resolve(path)}\n`);
       if (flags.open) openUrl(server.url);
       return { code: 0, running: withDb(server, db) };
     }
     case "serve": {
-      const db = await open(!!schema);
+      const db = await openLocal(!!schema);
       const server = await serve(db, {
         port: flags.port ? Number(flags.port) : 4401,
         host: typeof flags.host === "string" ? flags.host : "127.0.0.1",
         token: typeof flags.token === "string" ? flags.token : undefined,
         cors: !!flags.cors,
         dataPath: resolve(path),
+        auth: !flags["no-auth"],
         leader: !("leader" in flags) || flags.leader === true,
         standby: !!flags.standby,
       });
@@ -268,7 +350,7 @@ export async function run(argv: string[], io: IO): Promise<RunResult> {
       return { code: 0, running: withDb(server, db) };
     }
     case "sql": {
-      const db = await open(false);
+      const { db, close } = await open(false);
       try {
         const text = positional.length > 1 ? positional.slice(1).join(" ") : /\s/.test(positional[0] ?? "") ? positional[0]! : undefined;
         if (text) {
@@ -306,19 +388,19 @@ export async function run(argv: string[], io: IO): Promise<RunResult> {
         io.err(`error: ${(e as Error).message}\n`);
         return { code: 1 };
       } finally {
-        await db.close();
+        await close();
       }
     }
     case "tables": {
-      const db = await open(false);
+      const { db, close } = await open(false);
       io.out(describeTables(await db.tables()));
-      await db.close();
+      await close();
       return { code: 0 };
     }
     case "stats": {
-      const db = await open(false);
+      const { db, close } = await open(false);
       io.out(JSON.stringify(await db.stats(), null, 2) + "\n");
-      await db.close();
+      await close();
       return { code: 0 };
     }
     case "diff":
@@ -327,7 +409,7 @@ export async function run(argv: string[], io: IO): Promise<RunResult> {
         io.err(`wave ${cmd} needs --schema <file>\n`);
         return { code: 2 };
       }
-      const db = await open(false);
+      const { db, close } = await open(false);
       try {
         if (cmd === "diff") {
           const ops = await db.diff();
@@ -341,13 +423,13 @@ export async function run(argv: string[], io: IO): Promise<RunResult> {
         io.err(`error: ${(e as Error).message}\n`);
         return { code: 1 };
       } finally {
-        await db.close();
+        await close();
       }
     }
     case "export": {
-      const db = await open(false);
+      const { db, close } = await open(false);
       const dump = await exportDump(db);
-      await db.close();
+      await close();
       const text = JSON.stringify(dump);
       if (typeof flags.out === "string") {
         writeFileSync(flags.out, text);
@@ -360,7 +442,7 @@ export async function run(argv: string[], io: IO): Promise<RunResult> {
         io.err("wave import needs --in <dump.json>\n");
         return { code: 2 };
       }
-      const db = await open(false);
+      const { db, close } = await open(false);
       try {
         const n = await importDump(db, JSON.parse(readFileSync(flags.in, "utf8")));
         io.out(`Imported ${n} row(s)\n`);
@@ -369,18 +451,18 @@ export async function run(argv: string[], io: IO): Promise<RunResult> {
         io.err(`error: ${(e as Error).message}\n`);
         return { code: 1 };
       } finally {
-        await db.close();
+        await close();
       }
     }
     case "vacuum":
     case "compact": {
-      const db = await open(false);
+      const { db, close } = await open(false);
       if (cmd === "vacuum") io.out(`Removed ${await db.vacuum()} dead version(s)\n`);
       else {
         await db.compact();
         io.out("Compaction complete\n");
       }
-      await db.close();
+      await close();
       return { code: 0 };
     }
     default:

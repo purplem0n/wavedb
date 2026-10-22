@@ -36,11 +36,21 @@ SEED_PROFILE=full bun run seed:force    # wipe data/ and re-seed
 bun run seed:small:force                # wipe data/ and re-seed (~1k rows, all tables)
 ```
 
-### Wave Studio
+### Wave Studio (same port as the API)
+
+With `bun run dev` or `bun run start`, the app calls `app.use(waveHost(db, { dataPath }).hono())` — Studio at **`/studio`**, HTTP API at **`/__wave/api`** (superuser auth on first visit).
 
 ```bash
-bun run seed:small:force   # populate ./data.wave
-wave studio                # or: bun run studio
+bun run seed:small:force
+bun run dev
+# open http://localhost:3000/studio
+```
+
+Standalone Studio on another port (separate process — do not use while `bun run dev` holds the same `data.wave`):
+
+```bash
+wave studio ./data.wave --no-auth   # legacy token-only mode
+wave studio ./data.wave             # superuser auth (recommended)
 ```
 
 ## Endpoints

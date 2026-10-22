@@ -55,14 +55,22 @@ Pin `WAVEDB_VERSION` to a tag that exists on [Releases](https://github.com/purpl
 | Pattern | Use when |
 |--------|----------|
 | **Embedded** | One app process owns the DB: `await wave("/data/app.wave", { schema, durability: "sync" })` |
+| **Embedded + Studio** | Same process: `app.use(waveHost(db, { dataPath }).hono())` ([example](../examples/hono-marketplace)) |
 | **Sidecar `serve`** | Multiple workers / languages: one `wave serve` opens files; others use `connect("http://127.0.0.1:4401", { token })` |
 | **Remote + failover** | `connect(primaryUrl, { urls: [primary, standby], token })` probes `/api/health` |
 
 Environment conventions:
 
 - `WAVE_PATH` — database directory
-- `WAVE_SERVE_TOKEN` — bearer token for HTTP API
+- `WAVE_URL` — HTTP base when the DB is already open (e.g. `http://127.0.0.1:3000/__wave`); used by `wave` CLI `--url`
+- `WAVE_SERVE_TOKEN` — static bearer for machine clients (`connect`, `--token`)
+- `WAVE_ADMIN_PASSWORD` — bootstrap superuser on first start (optional; otherwise use Studio setup)
+- `WAVE_SESSION_SECRET` — override session signing (optional; default writes `data.wave/.wave/session.key`)
 - `WAVE_DURABILITY=sync|async`
+
+### Superuser auth
+
+When `dataPath` is set on `serve()` / `createWaveHandler()`, Wave enables superuser auth for **Studio and `/api/*` only** (not your app’s in-process queries). First visit: create a password in Studio, or set `WAVE_ADMIN_PASSWORD` before boot. Sessions are httpOnly cookies; automation can use `WAVE_SERVE_TOKEN` or a session token from `POST /api/auth/login`.
 
 ## Platforms
 

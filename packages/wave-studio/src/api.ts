@@ -54,14 +54,34 @@ export class ApiError extends Error {
   }
 }
 
+declare global {
+  interface Window {
+    __WAVE_API_PREFIX__?: string;
+  }
+}
+
+/** Wave HTTP API prefix (includes `/api` segment), e.g. `/api` or `/__wave/api`. */
+export function getApiPrefix(): string {
+  if (typeof window !== "undefined" && window.__WAVE_API_PREFIX__) return window.__WAVE_API_PREFIX__;
+  const fromEnv = import.meta.env.VITE_WAVE_API_PREFIX;
+  return typeof fromEnv === "string" && fromEnv ? fromEnv : "/api";
+}
+
+function apiPath(sub: string): string {
+  const base = getApiPrefix().replace(/\/$/, "");
+  const tail = sub.startsWith("/") ? sub : `/${sub}`;
+  return `${base}${tail}`;
+}
+
 const TOKEN_KEY = "wave-studio-token";
 export const getToken = () => localStorage.getItem(TOKEN_KEY) ?? "";
 export const setToken = (t: string) => (t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY));
 
-async function call<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+async function call<T>(method: "GET" | "POST", subPath: string, body?: unknown): Promise<T> {
   const token = getToken();
-  const res = await fetch(path, {
+  const res = await fetch(apiPath(subPath), {
     method,
+    credentials: "include",
     headers: {
       ...(body !== undefined ? { "content-type": "application/json" } : {}),
       ...(token ? { authorization: `Bearer ${token}` } : {}),
@@ -76,12 +96,21 @@ async function call<T>(method: "GET" | "POST", path: string, body?: unknown): Pr
   return data as T;
 }
 
+export type AuthPhase = "setup" | "login" | "ready";
+
+export const authApi = {
+  status: () => call<{ phase: AuthPhase; auth?: boolean }>("GET", "/auth/status"),
+  setup: (password: string) => call<{ ok: boolean }>("POST", "/auth/setup", { password }),
+  login: (password: string) => call<{ ok: boolean }>("POST", "/auth/login", { password }),
+  logout: () => call<{ ok: boolean }>("POST", "/auth/logout", {}),
+};
+
 export const api = {
-  tables: () => call<TableDef[]>("GET", "/api/tables"),
-  stats: () => call<Stats>("GET", "/api/stats"),
-  sql: (sql: string, params: unknown[] = []) => call<QueryResult>("POST", "/api/run", { sql, params }),
-  vacuum: () => call<{ removed: number }>("POST", "/api/vacuum", {}),
-  compact: () => call<{ ok: boolean }>("POST", "/api/compact", {}),
+  tables: () => call<TableDef[]>("GET", "/tables"),
+  stats: () => call<Stats>("GET", "/stats"),
+  sql: (sql: string, params: unknown[] = []) => call<QueryResult>("POST", "/run", { sql, params }),
+  vacuum: () => call<{ removed: number }>("POST", "/vacuum", {}),
+  compact: () => call<{ ok: boolean }>("POST", "/compact", {}),
 };
 
 export const quote = (id: string) => `"${id.replace(/"/g, '""')}"`;

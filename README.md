@@ -92,7 +92,7 @@ WaveDB is **early software** (0.1). The engine is well tested, but the on-disk f
 | **SQL** | A parser front-end (sqlparser) onto the same statement IR the builder emits: `SELECT` (joins, group, having, order, limit/offset, distinct), `INSERT`, `UPDATE`, `DELETE`, `CREATE/DROP TABLE|INDEX`, `ALTER TABLE` (one op), `EXPLAIN`, `$n` / `?` params. |
 | **Bindings** | napi-rs addon (async tasks on the thread pool + sync variants); the same `.node` loads in Node ≥ 20 and Bun. |
 | **TypeScript package** (`packages/wavedb`) | Schema DSL, typed builders, `sql` tag, `db.tx()` with retry/back-off and `snapshot`/`serializable`, manual `begin()`, relational `db.query`, `diff()` / `push()` (additive; destructive changes need `allowDestructive`), ordered `migrate()` runner, `watch()`, `vacuum()`/`compact()`/`stats()`, typed errors (`ConflictError`, `ConstraintError`, …). |
-| **Server / remote** | `serve(db, { token, staticDir })` (Node `http`, Bun compatible) with remote transactions (idle rollback), bearer token auth; `connect(url)` returns the same `Database` API over HTTP. |
+| **Server / remote** | `serve(db, …)` or mountable `createWaveHandler(db, …)` (Node `http` + Fetch; Hono/Bun compatible) with superuser auth, Studio static assets, remote transactions; `connect(url)` returns the same `Database` API over HTTP. |
 | **CLI** (`packages/wave-cli`) | `wave studio`, `dev`, `serve`, `sql` (one-shot + REPL), `tables`, `stats`, `diff`, `push`, `export`, `import`, `vacuum`, `compact`. |
 | **Studio** (`packages/wave-studio`) | Vite + React SPA: table browser (filter, sort, paging), SQL console with history, schema view, live engine stats. Lighthouse accessibility 100 / best-practices 100. |
 
@@ -139,6 +139,23 @@ const server = await serve(db, { port: 4401, token: "secret" });   // host proce
 const remote = await connect("http://127.0.0.1:4401", { schema, token: "secret" });  // any other process
 await remote.tx(async (tx) => { /* identical API, conflicts retried over the wire */ });
 ```
+
+### Embed Studio + API in your HTTP server (Hono / Bun)
+
+One process opens the database; your app uses the in-process `db`, while Studio and the Wave HTTP API mount on the same port:
+
+```ts
+import { wave } from "@purplemon/wavedb";
+import { waveHost } from "@purplemon/wavedb/server";
+
+const db = await wave("./data.wave", { schema });
+const wave = waveHost(db, { dataPath: "./data.wave" });
+app.use(wave.hono()); // Studio at /studio, API at /__wave/api (auto-detects Studio dist)
+```
+
+Superuser credentials live in `data.wave/.wave/admin.json`. Set `WAVE_ADMIN_PASSWORD` on first boot to skip the Studio setup screen. While the app is running, use `wave sql --url http://127.0.0.1:3000/__wave --token …` (or `--password`) instead of opening the files twice.
+
+See [examples/hono-marketplace](examples/hono-marketplace).
 
 ## How it works
 
