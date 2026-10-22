@@ -33,6 +33,7 @@
     "README.md"
   ],
   "scripts": {
+    "prepare": "tsc -p tsconfig.build.json",
     "postinstall": "node scripts/install-native.mjs",
     "build": "tsc -p tsconfig.build.json",
     "build:native": "node ../../scripts/build-native.mjs",
@@ -51,11 +52,11 @@
     ]
   },
   "optionalDependencies": {
-    "@purplemon/wavedb-darwin-arm64": "workspace:*",
-    "@purplemon/wavedb-darwin-x64": "workspace:*",
-    "@purplemon/wavedb-linux-arm64": "workspace:*",
-    "@purplemon/wavedb-linux-x64": "workspace:*",
-    "@purplemon/wavedb-win32-x64": "workspace:*"
+    "@purplemon/wavedb-darwin-arm64": "0.1.0",
+    "@purplemon/wavedb-darwin-x64": "0.1.0",
+    "@purplemon/wavedb-linux-arm64": "0.1.0",
+    "@purplemon/wavedb-linux-x64": "0.1.0",
+    "@purplemon/wavedb-win32-x64": "0.1.0"
   },
   "engines": {
     "node": ">=20"
@@ -69,6 +70,8 @@
     }
   },
   "devDependencies": {
-    "hono": "^4.13.13"
+    "@types/node": "latest",
+    "hono": "^4.13.13",
+    "typescript": "latest"
   }
 }

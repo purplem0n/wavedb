@@ -15,14 +15,24 @@
     "studio"
   ],
   "scripts": {
+    "prepare": "tsc -p tsconfig.build.json",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test test"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/purplem0n/wavedb.git",
+    "directory": "packages/wave-cli"
+  },
   "dependencies": {
-    "@purplemon/wavedb": "workspace:*"
+    "@purplemon/wavedb": "0.1.0"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "typescript": "latest"
   }
 }

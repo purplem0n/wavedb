@@ -4,20 +4,22 @@ WaveDB is an **embedded native database** with a **persistent on-disk directory*
 
 ## Install
 
-Node ≥ 20 or Bun ≥ 1.1.
+Node ≥ 20 or Bun ≥ 1.1. Registry and GitHub install commands: [README — Install](../README.md#install).
 
 ```bash
 npm install @purplemon/wavedb
 npm install -g @purplemon/wave-cli   # optional: `wave serve`, `wave studio`, …
 ```
 
-Prebuilt native addons ship via optional `@purplemon/wavedb-<platform>-<arch>` packages (for example `@purplemon/wavedb-linux-x64` on Fly/Linux amd64). After `npm install @purplemon/wavedb`, your lockfile should list the matching optional package; if startup fails with “native addon not found”, install it explicitly:
+Without the npm registry:
 
 ```bash
-npm install @purplemon/wavedb-linux-x64   # linux x64 (Fly, Render, Docker amd64)
+npm install 'github:purplem0n/wavedb#path:packages/wavedb'
 ```
 
-From source (monorepo): `bun run build:native` (Rust stable required). The npm tarball does **not** include Rust sources—you cannot run `build:native` from `node_modules` alone. See the [README](../README.md#install) for `bun`/`pnpm` and `npx` usage.
+Prebuilt native addons ship via optional `@purplemon/wavedb-<platform>-<arch>` packages when installing from npm (for example `@purplemon/wavedb-linux-x64` on Fly/Linux amd64). GitHub installs use `postinstall` to fetch the same binaries from Releases. If startup fails with “native addon not found”, install the optional platform package from npm or ensure a matching [GitHub Release](https://github.com/purplem0n/wavedb/releases) tag exists.
+
+From source (monorepo): `bun run build:native` (Rust stable required). The published tarball does **not** include Rust sources—you cannot run `build:native` from `node_modules` alone.
 
 ### Native addon on Linux / CI (Fly, Docker, GitHub deploy)
 
