@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, type Stats } from "./api";
 import { Icon } from "./icons";
+import { waveEngineVersionTag } from "./version";
 
 function bytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -159,7 +160,7 @@ export function StatsView({ onChanged }: { onChanged: () => void }) {
                 <span className="metric-label">Engine Version</span>
                 <Icon name="verified" className="icon-sm" style={{ color: "var(--primary)" }} />
               </div>
-              <div className="mono-md">WaveDB v0.1 (embedded)</div>
+              <div className="mono-md">WaveDB {waveEngineVersionTag()} (embedded)</div>
               <span className="stats-config-sub">Rust core · MVCC + optimistic concurrency</span>
             </div>
             <div className="stats-config-card">

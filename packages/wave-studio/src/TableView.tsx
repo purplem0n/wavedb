@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, engineQueryDurationMs, quote, uiToEngineLatencyMs, type QueryResult, type TableDef } from "./api";
 import { DataGrid } from "./DataGrid";
 import { RefreshIcon } from "./icons";
+import { waveEngineVersionTag } from "./version";
 
 const PAGE = 50;
 
@@ -67,7 +68,7 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
       <div className="table-page-head">
         <div className="table-title-block">
           <h1 id="table-title">{table.name}</h1>
-          <span className="pill-version">v0.1</span>
+          <span className="pill-version">{waveEngineVersionTag()}</span>
           <div className="table-chips">
             <span className="chip">{total === null ? "…" : total.toLocaleString()} rows</span>
             <span className="chip">{table.columns.length} columns</span>

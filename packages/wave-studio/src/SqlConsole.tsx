@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, uiToEngineLatencyMs, type QueryResult } from "./api";
 import { DataGrid } from "./DataGrid";
 import { Icon } from "./icons";
+import { waveEngineVersionTag } from "./version";
 
 const HISTORY_KEY = "wave-studio-history";
 
@@ -82,7 +83,7 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
           <div className="sql-kicker">
             <span>Console</span>
             <span className="dot" />
-            <span className="ver">v0.1-embedded</span>
+            <span className="ver">{waveEngineVersionTag("-embedded")}</span>
           </div>
           <h1 id="sql-title" className="page-title">
             SQL console

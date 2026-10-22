@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, describeDefault, type TableDef } from "./api";
 import { Icon } from "./icons";
+import { waveEngineVersionTag } from "./version";
 
 function bytesShort(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -30,7 +31,7 @@ export function SchemaView({ tables, onOpen }: { tables: TableDef[]; onOpen: (na
         <div>
           <div className="page-title-row">
             <h1 className="page-title">Schema</h1>
-            <span className="pill-version">v0.1 engine</span>
+            <span className="pill-version">{waveEngineVersionTag(" engine")}</span>
           </div>
           <p className="page-sub">
             {tables.length} table{tables.length === 1 ? "" : "s"} defined in embedded engine
