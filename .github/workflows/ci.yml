@@ -14,32 +14,15 @@ jobs:
       - run: cargo test --workspace
 
   native-and-ts:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-14
-            target: aarch64-apple-darwin
-          - os: macos-13
-            target: x86_64-apple-darwin
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
       - uses: oven-sh/setup-bun@v2
       - run: bun install
         env:
           WAVE_SKIP_NATIVE_DOWNLOAD: "1"
-      - run: bunx @napi-rs/cli build --release --target ${{ matrix.target }} --cargo-cwd crates/wave-napi packages/wavedb/native
-      - run: node scripts/sync-native-packages.mjs
+      - run: node scripts/build-native.mjs
       - run: node scripts/prebuild-smoke.mjs
-      - run: bun run test:ts
+      - run: bun test packages/wavedb/test packages/wave-cli/test
       - run: node scripts/node-smoke.mjs

@@ -17,9 +17,6 @@ jobs:
           - os: macos-14
             target: aarch64-apple-darwin
             pkg: wavedb-darwin-arm64
-          - os: macos-13
-            target: x86_64-apple-darwin
-            pkg: wavedb-darwin-x64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             pkg: wavedb-linux-x64
@@ -39,7 +36,7 @@ jobs:
       - run: bun install
         env:
           WAVE_SKIP_NATIVE_DOWNLOAD: "1"
-      - run: bunx @napi-rs/cli build --release --target ${{ matrix.target }} --cargo-cwd crates/wave-napi packages/wavedb/native
+      - run: node scripts/build-native.mjs --target ${{ matrix.target }}
       - run: node scripts/sync-native-packages.mjs
       - uses: actions/upload-artifact@v4
         with:
@@ -59,7 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          for pkg in wavedb-darwin-arm64 wavedb-darwin-x64 wavedb-linux-arm64 wavedb-linux-x64 wavedb-win32-x64; do
+          for pkg in wavedb-darwin-arm64 wavedb-linux-arm64 wavedb-linux-x64 wavedb-win32-x64; do
             if [ -d "native-artifacts/${pkg}" ]; then
               cp native-artifacts/${pkg}/*.node release-assets/ 2>/dev/null || true
             fi
@@ -94,7 +91,7 @@ jobs:
       - name: Merge native artifacts into packages
         run: |
           set -euo pipefail
-          for pkg in wavedb-darwin-arm64 wavedb-darwin-x64 wavedb-linux-arm64 wavedb-linux-x64 wavedb-win32-x64; do
+          for pkg in wavedb-darwin-arm64 wavedb-linux-arm64 wavedb-linux-x64 wavedb-win32-x64; do
             if [ -d "native-artifacts/${pkg}" ]; then
               mkdir -p "packages/${pkg}"
               cp -R "native-artifacts/${pkg}/." "packages/${pkg}/"

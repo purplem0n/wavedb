@@ -35,7 +35,7 @@
   "scripts": {
     "postinstall": "node scripts/install-native.mjs",
     "build": "tsc -p tsconfig.build.json",
-    "build:native": "napi build --release --cargo-cwd ../../crates/wave-napi native",
+    "build:native": "node ../../scripts/build-native.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test test"
   },
