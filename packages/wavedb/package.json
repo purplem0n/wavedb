@@ -51,13 +51,6 @@
       "x86_64-pc-windows-msvc"
     ]
   },
-  "optionalDependencies": {
-    "@purplemon/wavedb-darwin-arm64": "0.1.0",
-    "@purplemon/wavedb-darwin-x64": "0.1.0",
-    "@purplemon/wavedb-linux-arm64": "0.1.0",
-    "@purplemon/wavedb-linux-x64": "0.1.0",
-    "@purplemon/wavedb-win32-x64": "0.1.0"
-  },
   "engines": {
     "node": ">=20"
   },

@@ -17,7 +17,7 @@ Without the npm registry:
 npm install 'github:purplem0n/wavedb#path:packages/wavedb'
 ```
 
-Prebuilt native addons ship via optional `@purplemon/wavedb-<platform>-<arch>` packages when installing from npm (for example `@purplemon/wavedb-linux-x64` on Fly/Linux amd64). GitHub installs use `postinstall` to fetch the same binaries from Releases. If startup fails with “native addon not found”, install the optional platform package from npm or ensure a matching [GitHub Release](https://github.com/purplem0n/wavedb/releases) tag exists.
+Prebuilt native addons are fetched from [GitHub Releases](https://github.com/purplem0n/wavedb/releases) matching the package version (`postinstall` on `@purplemon/wavedb`). If startup fails with “native addon not found”, ensure a release tag exists with `wave.<platform>-<arch>.node` assets, set `WAVE_NATIVE_PATH`, or build from the monorepo with `bun run build:native`.
 
 From source (monorepo): `bun run build:native` (Rust stable required). The published tarball does **not** include Rust sources—you cannot run `build:native` from `node_modules` alone.
 

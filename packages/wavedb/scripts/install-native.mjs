@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * After npm/bun install: fetch prebuilt wave.<platform>-<arch>.node from GitHub
- * Releases when optional @purplemon/wavedb-* packages are missing (e.g. Linux on npm).
+ * After install: fetch prebuilt wave.<platform>-<arch>.node from GitHub Releases
+ * when the addon is not already present (monorepo build, WAVE_NATIVE_PATH, etc.).
  */
 import { createRequire } from "node:module";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";

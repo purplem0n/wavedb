@@ -13,8 +13,7 @@ if (!existsSync(join(cliDir, "src/cli.ts"))) {
   process.exit(0);
 }
 
-const wavedbTypes = join(wavedbDir, "dist/index.d.ts");
-if (!existsSync(wavedbTypes) && existsSync(join(wavedbDir, "tsconfig.build.json"))) {
+if (existsSync(join(wavedbDir, "tsconfig.build.json"))) {
   const r = spawnSync("tsc", ["-p", "tsconfig.build.json"], { cwd: wavedbDir, stdio: "inherit" });
   if (r.status !== 0) process.exit(r.status ?? 1);
 }

@@ -26,7 +26,7 @@
     "directory": "packages/wave-cli"
   },
   "dependencies": {
-    "@purplemon/wavedb": "0.1.0"
+    "@purplemon/wavedb": "workspace:*"
   },
   "engines": {
     "node": ">=20"
