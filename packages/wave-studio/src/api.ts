@@ -11,6 +11,12 @@ export interface IndexDef {
   columns: string[];
   unique: boolean;
 }
+/** Matches catalog JSON (`ref_table` / `ref_columns` are snake_case). */
+export interface ForeignKeyDef {
+  columns: string[];
+  ref_table: string;
+  ref_columns: string[];
+}
 export interface TableDef {
   id: number;
   name: string;
@@ -18,6 +24,7 @@ export interface TableDef {
   primaryKey: string[];
   autoIncrement: boolean;
   indexes: IndexDef[];
+  foreignKeys?: ForeignKeyDef[];
   version: number;
 }
 export interface Stats {
@@ -78,6 +85,16 @@ export const api = {
 };
 
 export const quote = (id: string) => `"${id.replace(/"/g, '""')}"`;
+
+/** Escape a value for inline SQL (studio previews only). */
+export function sqlLiteral(v: unknown): string {
+  if (v === null || v === undefined) return "NULL";
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  if (typeof v === "boolean") return v ? "1" : "0";
+  if (typeof v === "string") return `'${v.replace(/'/g, "''")}'`;
+  if (typeof v === "bigint") return String(v);
+  return `'${JSON.stringify(v).replace(/'/g, "''")}'`;
+}
 
 /** Render a cell value (blobs and JSON included) for display. */
 export function display(v: unknown, type?: string): string {

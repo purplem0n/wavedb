@@ -1,4 +1,13 @@
-import { display } from "./api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { display, type TableDef } from "./api";
+import { clearFkPreviewCache, FkPreviewLayer } from "./FkPreview";
+import { relationsForCell } from "./fkRelations";
+import { Icon } from "./icons";
+
+function sortIcon(active: boolean, desc: boolean) {
+  if (!active) return "unfold_more";
+  return desc ? "south" : "north";
+}
 
 export function DataGrid({
   caption,
@@ -7,6 +16,9 @@ export function DataGrid({
   sort,
   onSort,
   types,
+  embedded,
+  schema,
+  tableDef,
 }: {
   caption: string;
   columns: string[];
@@ -14,25 +26,84 @@ export function DataGrid({
   sort?: { column: string; desc: boolean } | null;
   onSort?: (column: string) => void;
   types?: Record<string, string>;
+  /** When true, omits outer panel wrapper (parent provides container). */
+  embedded?: boolean;
+  /** Full catalog — enables FK hover previews when `tableDef` is set. */
+  schema?: TableDef[];
+  tableDef?: TableDef;
 }) {
+  const fkEnabled = !!(schema?.length && tableDef);
+  const [fkPreview, setFkPreview] = useState<{ rect: DOMRect; relations: ReturnType<typeof relationsForCell> } | null>(null);
+  const hoverTimer = useRef<number | null>(null);
+  const closeTimer = useRef<number | null>(null);
+
+  const clearTimers = () => {
+    if (hoverTimer.current !== null) {
+      window.clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+
+  const schedulePreview = (el: HTMLElement, relations: ReturnType<typeof relationsForCell>) => {
+    clearTimers();
+    if (!relations.length) return;
+    hoverTimer.current = window.setTimeout(() => {
+      setFkPreview({ rect: el.getBoundingClientRect(), relations });
+    }, 280);
+  };
+
+  const scheduleClose = () => {
+    if (hoverTimer.current !== null) {
+      window.clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+    closeTimer.current = window.setTimeout(() => setFkPreview(null), 160);
+  };
+
+  const cancelClose = () => {
+    if (closeTimer.current !== null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+
+  const schemaKey = useMemo(() => (schema ? schema.map((t) => `${t.name}:${t.version}`).join("|") : ""), [schema]);
+
+  useEffect(() => {
+    clearFkPreviewCache();
+    setFkPreview(null);
+  }, [schemaKey]);
+
   if (columns.length === 0) return null;
-  return (
-    <div className="grid-wrap" role="region" aria-label={caption} tabIndex={0}>
-      <table className="grid">
+
+  const table = (
+    <>
+      <table className="data-table">
         <caption className="sr-only">{caption}</caption>
         <thead>
           <tr>
             {columns.map((c) => {
               const active = sort?.column === c;
+              const typeHint = types?.[c];
+              const numeric = typeHint && /int|real|float|numeric|decimal/i.test(typeHint);
               return (
-                <th key={c} scope="col" aria-sort={active ? (sort!.desc ? "descending" : "ascending") : undefined}>
+                <th key={c} scope="col" className={numeric ? "text-right" : undefined}>
                   {onSort ? (
-                    <button type="button" className="th-btn" onClick={() => onSort(c)}>
-                      {c}
-                      <span aria-hidden="true">{active ? (sort!.desc ? " ▼" : " ▲") : ""}</span>
+                    <button type="button" className="th-sort" onClick={() => onSort(c)} aria-sort={active ? (sort!.desc ? "descending" : "ascending") : undefined}>
+                      <span>{c}</span>
+                      {typeHint && <span className="type-hint">{typeHint}</span>}
+                      <Icon name={sortIcon(!!active, !!sort?.desc && active)} className={`icon-sm${active ? "" : " sort-idle"}`} />
                     </button>
                   ) : (
-                    c
+                    <div className="th-sort">
+                      <span>{c}</span>
+                      {typeHint && <span className="type-hint">{typeHint}</span>}
+                    </div>
                   )}
                 </th>
               );
@@ -49,16 +120,63 @@ export function DataGrid({
           ) : (
             rows.map((r, i) => (
               <tr key={i}>
-                {r.map((v, j) => (
-                  <td key={j} className={v === null ? "null" : typeof v === "number" ? "num" : undefined} title={display(v, types?.[columns[j]!])}>
-                    {display(v, types?.[columns[j]!])}
-                  </td>
-                ))}
+                {r.map((v, j) => {
+                  const col = columns[j]!;
+                  const typeHint = types?.[col];
+                  const numeric = typeof v === "number" || (typeHint && /int|real|float|numeric|decimal/i.test(typeHint));
+                  const relations =
+                    fkEnabled && v !== null && v !== undefined
+                      ? relationsForCell(schema!, tableDef!, col, r, columns)
+                      : [];
+                  const fkCell = relations.length > 0;
+                  return (
+                    <td
+                      key={j}
+                      className={[
+                        v === null ? "null" : undefined,
+                        numeric ? "cell-num text-right" : j === 0 ? "cell-id" : undefined,
+                        fkCell ? "fk-cell" : undefined,
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      title={fkCell ? undefined : display(v, typeHint)}
+                      onMouseEnter={
+                        fkCell
+                          ? (e) => {
+                              cancelClose();
+                              schedulePreview(e.currentTarget, relations);
+                            }
+                          : undefined
+                      }
+                      onMouseLeave={fkCell ? scheduleClose : undefined}
+                    >
+                      {display(v, typeHint)}
+                    </td>
+                  );
+                })}
               </tr>
             ))
           )}
         </tbody>
       </table>
+      {fkPreview && (
+        <FkPreviewLayer
+          anchor={fkPreview.rect}
+          relations={fkPreview.relations}
+          onClose={() => {
+            clearTimers();
+            setFkPreview(null);
+          }}
+        />
+      )}
+    </>
+  );
+
+  if (embedded) return table;
+
+  return (
+    <div className="data-panel" role="region" aria-label={caption} tabIndex={0}>
+      {table}
     </div>
   );
 }

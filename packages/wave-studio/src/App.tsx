@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api, getToken, setToken, type TableDef } from "./api";
 import { SchemaView } from "./SchemaView";
+import { Shell } from "./Shell";
 import { SqlConsole } from "./SqlConsole";
 import { StatsView } from "./StatsView";
 import { TableView } from "./TableView";
+import { Icon, WaveLogo } from "./icons";
 
 type Route = { page: "table"; name: string } | { page: "sql" } | { page: "schema" } | { page: "stats" };
 
@@ -62,87 +64,50 @@ export function App() {
   if (needsToken) {
     return (
       <main className="login">
-        <h1>Wave Studio</h1>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            setToken(tokenInput);
-            void refresh();
-          }}
-        >
-          <label htmlFor="token">Access token</label>
-          <input id="token" type="password" value={tokenInput} onChange={(e) => setTokenInput(e.target.value)} autoComplete="off" />
-          <button type="submit">Connect</button>
-        </form>
+        <div className="login-card">
+          <h1>
+            <WaveLogo className="brand-logo" />
+            Wave Studio
+          </h1>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              setToken(tokenInput);
+              void refresh();
+            }}
+          >
+            <label htmlFor="token">Access token</label>
+            <input id="token" type="password" value={tokenInput} onChange={(e) => setTokenInput(e.target.value)} autoComplete="off" />
+            <button type="submit" className="btn-run">
+              Connect
+            </button>
+          </form>
+        </div>
       </main>
     );
   }
 
   return (
-    <div className="shell">
-      <a className="skip" href="#main">
-        Skip to content
-      </a>
-      <aside className="sidebar" aria-label="Database navigation">
-        <h1 className="brand">
-          <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true">
-            <path d="M2 18c4-8 8-8 12 0s8 8 12 0" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
-          </svg>
-          Wave Studio
-        </h1>
-        <nav aria-label="Views">
-          <ul>
-            {(
-              [
-                ["schema", "Schema"],
-                ["sql", "SQL console"],
-                ["stats", "Stats"],
-              ] as const
-            ).map(([p, label]) => (
-              <li key={p}>
-                <a href={`#/${p}`} aria-current={route.page === p ? "page" : undefined}>
-                  {label}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </nav>
-        <nav aria-label="Tables">
-          <h2 className="side-title">Tables</h2>
-          {tables.length === 0 ? (
-            <p className="muted small">No tables</p>
-          ) : (
-            <ul>
-              {tables.map((t) => (
-                <li key={t.name}>
-                  <a href={`#/table/${encodeURIComponent(t.name)}`} aria-current={route.page === "table" && route.name === t.name ? "page" : undefined}>
-                    {t.name}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-          <button type="button" className="secondary side-btn" onClick={() => void refresh()}>
-            Reload
-          </button>
-        </nav>
-      </aside>
-      <main id="main" tabIndex={-1}>
-        {error && (
-          <p role="alert" className="error">
-            {error}
-          </p>
-        )}
-        {route.page === "schema" && <SchemaView tables={tables} onOpen={(n) => go(`#/table/${encodeURIComponent(n)}`)} />}
-        {route.page === "sql" && <SqlConsole onChanged={() => void refresh()} />}
-        {route.page === "stats" && <StatsView onChanged={() => void refresh()} />}
-        {route.page === "table" &&
-          (current ? (
-            <TableView table={current} version={version} />
-          ) : (
-            <p className="muted">Table “{route.name}” not found.</p>
-          ))}
-      </main>
-    </div>
+    <Shell route={route} tables={tables} connected={!error && !needsToken} onRefresh={() => void refresh()}>
+      {error && (
+        <p role="alert" className="alert alert--error">
+          {error}
+        </p>
+      )}
+      {route.page === "schema" && <SchemaView tables={tables} onOpen={(n) => go(`#/table/${encodeURIComponent(n)}`)} />}
+      {route.page === "sql" && <SqlConsole onChanged={() => void refresh()} />}
+      {route.page === "stats" && <StatsView onChanged={() => void refresh()} />}
+      {route.page === "table" &&
+        (current ? (
+          <TableView table={current} tables={tables} version={version} />
+        ) : (
+          <div className="empty-state">
+            <Icon name="table_rows" className="icon-lg" />
+            <p>
+              Table “{route.name}” not found.
+            </p>
+          </div>
+        ))}
+    </Shell>
   );
 }
