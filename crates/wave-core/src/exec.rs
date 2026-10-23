@@ -19,7 +19,7 @@ pub struct DbTxn {
     txn: Txn,
     tables: HashMap<String, Arc<TableDef>>,
     /// Pending integer column deltas merged at commit (conflict-free under lock).
-    commutative: HashMap<Vec<u8>, (Arc<TableDef>, Vec<Value>, HashMap<usize, i64>)>,
+    commutative: HashMap<Vec<u8>, (Arc<TableDef>, Vec<Value>, HashMap<usize, i64>, Option<BExpr>)>,
 }
 
 enum SourceKind {
@@ -1095,7 +1095,7 @@ impl DbTxn {
         if !self.commutative.is_empty() {
             let pending = std::mem::take(&mut self.commutative);
             self.txn.on_commit(move |txn| {
-                for (_, (t, _old, deltas)) in pending {
+                for (_, (t, _old, deltas, where_)) in pending {
                     let pk = t.pk_enc(&_old);
                     let rk = t.row_key(&pk);
                     let vis = txn.engine().visible_ts();
@@ -1103,6 +1103,14 @@ impl DbTxn {
                         Some(b) => t.decode_value(&b)?,
                         None => return Err(Error::NotFound(format!("row missing for {}", t.name))),
                     };
+                    if let Some(w) = &where_ {
+                        if eval(w, &cur, &[])?.truthy() != Some(true) {
+                            return Err(Error::Conflict(format!(
+                                "conditional update predicate no longer satisfied on \"{}\"",
+                                t.name
+                            )));
+                        }
+                    }
                     let mut new = cur.clone();
                     for (p, d) in deltas {
                         let n = new[p].as_i64().unwrap_or(0).saturating_add(d);
@@ -1208,7 +1216,8 @@ impl DbTxn {
     fn exec_select(&mut self, st: &SelectStmt, explain: bool) -> Result<QueryResult> {
         let empty_ctes = HashMap::new();
         let empty_scope = HashSet::new();
-        self.exec_select_impl(st, explain, &empty_ctes, &empty_scope)
+        let mut expanding_views = HashSet::new();
+        self.exec_select_impl(st, explain, &empty_ctes, &empty_scope, &mut expanding_views, 0)
     }
 
     fn exec_select_impl(
@@ -1217,7 +1226,13 @@ impl DbTxn {
         explain: bool,
         parent_ctes: &HashMap<String, Arc<SubqueryResult>>,
         outer_scope: &HashSet<String>,
+        expanding_views: &mut HashSet<String>,
+        view_depth: usize,
     ) -> Result<QueryResult> {
+        const MAX_VIEW_DEPTH: usize = 32;
+        if view_depth > MAX_VIEW_DEPTH {
+            return Err(Error::Sql("view expansion depth limit exceeded".into()));
+        }
         if let Some(u) = &st.union {
             let mut left = st.clone();
             left.union = None;
@@ -1230,9 +1245,12 @@ impl DbTxn {
                     "UNION{}",
                     if u.all { " ALL" } else { "" }
                 ))]];
-                rows.extend(self.exec_select_impl(&left, true, parent_ctes, outer_scope)?.rows);
                 rows.extend(
-                    self.exec_select_impl(&u.right, true, parent_ctes, outer_scope)?
+                    self.exec_select_impl(&left, true, parent_ctes, outer_scope, expanding_views, view_depth)?
+                        .rows,
+                );
+                rows.extend(
+                    self.exec_select_impl(&u.right, true, parent_ctes, outer_scope, expanding_views, view_depth)?
                         .rows,
                 );
                 if stmt_contains_window(st) {
@@ -1244,8 +1262,8 @@ impl DbTxn {
                     ..Default::default()
                 });
             }
-            let l = self.exec_select_impl(&left, false, parent_ctes, outer_scope)?;
-            let r = self.exec_select_impl(&u.right, false, parent_ctes, outer_scope)?;
+            let l = self.exec_select_impl(&left, false, parent_ctes, outer_scope, expanding_views, view_depth)?;
+            let r = self.exec_select_impl(&u.right, false, parent_ctes, outer_scope, expanding_views, view_depth)?;
             if l.columns.len() != r.columns.len() {
                 return Err(Error::Sql("UNION requires the same number of columns".into()));
             }
@@ -1268,7 +1286,7 @@ impl DbTxn {
             if references_outer_aliases(&cte.query, outer_scope) {
                 return Err(Error::Sql("correlated subqueries are not supported".into()));
             }
-            let qr = self.exec_select_impl(&cte.query, false, &cte_map, outer_scope)?;
+            let qr = self.exec_select_impl(&cte.query, false, &cte_map, outer_scope, expanding_views, view_depth)?;
             cte_map.insert(
                 cte.name.clone(),
                 Arc::new(SubqueryResult {
@@ -1310,7 +1328,7 @@ impl DbTxn {
                 if references_outer_aliases(sq, scope) {
                     return Err(Error::Sql("correlated subqueries are not supported".into()));
                 }
-                let qr = this.exec_select_impl(sq.as_ref(), false, cte_map, scope)?;
+                let qr = this.exec_select_impl(sq.as_ref(), false, cte_map, scope, expanding_views, view_depth)?;
                 let cols = qr.columns.clone();
                 for c in &cols {
                     layout.cols.push((alias.clone(), c.clone()));
@@ -1330,7 +1348,12 @@ impl DbTxn {
                     label: tr.name.clone(),
                 }
             } else if let Some(view) = catalog::load_view(&mut this.txn, &tr.name)? {
-                let qr = this.exec_select_impl(&view.query, false, cte_map, scope)?;
+                if expanding_views.contains(&tr.name) {
+                    return Err(Error::Sql(format!("view expansion cycle: \"{}\"", tr.name)));
+                }
+                expanding_views.insert(tr.name.clone());
+                let qr = this.exec_select_impl(&view.query, false, cte_map, scope, expanding_views, view_depth + 1)?;
+                expanding_views.remove(&tr.name);
                 let cols = qr.columns.clone();
                 for c in &cols {
                     layout.cols.push((alias.clone(), c.clone()));
@@ -1433,7 +1456,7 @@ impl DbTxn {
             if references_outer_aliases(sq, &scope) {
                 return Err(Error::Sql("correlated subqueries are not supported".into()));
             }
-            let qr = self.exec_select_impl(sq, false, &cte_map, &scope)?;
+            let qr = self.exec_select_impl(sq, false, &cte_map, &scope, expanding_views, view_depth)?;
             subq_results.push(SubqueryResult {
                 columns: qr.columns,
                 rows: qr.rows,
@@ -2072,10 +2095,17 @@ impl DbTxn {
                 .ok_or_else(|| Error::NotFound(format!("column \"{}\" not found", a.column)))?;
             sets.push((p, bind(&a.expr, &mut cx)?));
         }
+        let wb = match st.where_.as_ref() {
+            Some(w) => Some(bind(w, &mut cx)?),
+            None => None,
+        };
         let rows = self.matching_rows(&t, st.where_.as_ref())?;
         let mut updated = vec![];
-        let commutative_ok =
-            !sets.is_empty() && sets.iter().all(|(p, e)| int_increment_delta(e, *p).is_some());
+        let pk_cols: HashSet<usize> = t.pk_positions().into_iter().collect();
+        let commutative_ok = !sets.is_empty()
+            && sets
+                .iter()
+                .all(|(p, e)| int_increment_delta(e, *p).is_some() && !pk_cols.contains(p));
         for old in rows {
             if commutative_ok {
                 let pk = t.pk_enc(&old);
@@ -2086,7 +2116,7 @@ impl DbTxn {
                     let entry = self
                         .commutative
                         .entry(rk.clone())
-                        .or_insert_with(|| (t.clone(), old.clone(), HashMap::new()));
+                        .or_insert_with(|| (t.clone(), old.clone(), HashMap::new(), wb.clone()));
                     *entry.2.entry(*p).or_insert(0) += d;
                     new[*p] = Value::Int(old[*p].as_i64().unwrap_or(0) + entry.2[p]);
                 }

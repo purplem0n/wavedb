@@ -5,5 +5,5 @@ const PACKAGE_ROOT = join(import.meta.dir, "..", "..");
 
 /** Same path `wave studio` uses when run from the example directory. */
 export function marketplaceWavePath(): string {
-  return process.env.WAVE_PATH ?? join(PACKAGE_ROOT, "data.wave");
+  return process.env.WAVE_DB_PATH ?? process.env.WAVE_PATH ?? join(PACKAGE_ROOT, "data.wave");
 }

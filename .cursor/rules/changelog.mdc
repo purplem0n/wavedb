@@ -1,0 +1,12 @@
+---
+description: Require CHANGELOG updates for every PR
+alwaysApply: true
+---
+
+# Changelog
+
+- Every pull request that changes `packages/`, `crates/`, or published docs must update root **CHANGELOG.md** under `[Unreleased]`.
+- Use sections: **Added**, **Fixed**, **Changed**, **Breaking** (omit empty sections).
+- Write user-facing bullets for operators and integrators, not internal refactors.
+- **Do not** add entries for **`examples/`**-only changes (example sync is required but not changelog-listed).
+- Before opening a PR, confirm CHANGELOG is updated on the same branch.

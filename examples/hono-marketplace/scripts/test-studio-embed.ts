@@ -2,7 +2,7 @@
  * E2E: embedded Wave Studio from a clean @purplemon/wavedb install (no monorepo workspace).
  * Run: bun run test:studio
  */
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { marketplaceWavePath } from "../src/db/paths.ts";
 
@@ -74,16 +74,21 @@ try {
   const configJs = await configRes.text();
   if (!configJs.includes("/__wave/api")) fail("config.js missing /__wave/api");
 
+  const setupTokenPath = join(wavePath, ".wave", "setup.token");
+  const setupToken = readFileSync(setupTokenPath, "utf8").trim();
   const setupRes = await fetch(`${base}/__wave/api/auth/setup`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ password: "testpass12" }),
+    body: JSON.stringify({ password: "testpass12", setupToken }),
   });
   if (!setupRes.ok) fail(`POST /auth/setup → ${setupRes.status} ${await setupRes.text()}`);
   if (!existsSync(adminFile)) fail("admin.json not created after setup");
 
+  const cookie = setupRes.headers.get("set-cookie") ?? "";
+  const session = /wave_session=([^;]+)/i.exec(cookie)?.[1];
+  if (!session) fail("setup did not return wave_session cookie");
   const tablesRes = await fetch(`${base}/__wave/api/tables`, {
-    headers: { authorization: `Bearer ${((await setupRes.json()) as { token: string }).token}` },
+    headers: { authorization: `Bearer ${decodeURIComponent(session)}` },
   });
   if (!tablesRes.ok) fail(`GET /tables after setup → ${tablesRes.status}`);
 

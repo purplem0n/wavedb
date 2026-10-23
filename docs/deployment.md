@@ -68,6 +68,7 @@ Environment variables (embedded `wave({ schema })` + `waveHost(db)`):
 | `WAVE_DB_PATH` | **Recommended** on production hosts with a persistent volume (default `./data.wave`) | Database directory for `wave()` / auth / leader files |
 | `WAVE_DURABILITY` | Optional (default `sync`) | `sync` or `async` |
 | `WAVE_ADMIN_PASSWORD` | Optional | Bootstrap superuser before first HTTP request (else Studio setup) |
+| `WAVE_SETUP_TOKEN` | Optional | One-time token for `POST /api/auth/setup` (alternative to `.wave/setup.token` on disk) |
 | `WAVE_SERVE_TOKEN` | Optional for browser Studio; **required** for token-only automation (`connect`, `wave --url --token`) | Bearer for `/api/*` |
 | `WAVE_LEADER` | Optional | `1` enables leader lease on `waveHost()` / `wave serve --leader` |
 | `WAVE_STANDBY` | Optional | `1` with leader: standby until lease acquired |
@@ -80,7 +81,7 @@ Install / native addon (see table above in this doc): `WAVE_NATIVE_REQUIRED`, `W
 
 ### Superuser auth
 
-When `dataPath` is set on `serve()` / `createWaveHandler()`, Wave enables superuser auth for **Studio and `/api/*` only** (not your app’s in-process queries). First visit: create a password in Studio, or set `WAVE_ADMIN_PASSWORD` before boot. Browser / Studio sessions use an **HttpOnly cookie** (`wave_session`, `Path` = your API prefix, e.g. `/__wave/api`). `POST /api/auth/login` returns `{ "ok": true }` only — the session is in `Set-Cookie`, not JSON. Automation: set **`WAVE_SERVE_TOKEN`** (or `--token` on `wave serve` / `connect`) for `Authorization: Bearer`. CLI: `wave sql --url … --password` caches the cookie under `.wave/`. Optional: `WAVE_TRUST_PROXY=1` for `Secure` cookies behind TLS-terminating proxies.
+When `dataPath` is set on `serve()` / `createWaveHandler()`, Wave enables superuser auth for **Studio and `/api/*` only** (not your app’s in-process queries). First visit: set `WAVE_ADMIN_PASSWORD` before boot, or use the one-time **`setupToken`** from `.wave/setup.token` (or `WAVE_SETUP_TOKEN`) with `POST /api/auth/setup`. Browser / Studio sessions use an **HttpOnly cookie** (`wave_session`, `Path` = your API prefix, e.g. `/__wave/api`). `POST /api/auth/login` returns `{ "ok": true }` only — the session is in `Set-Cookie`, not JSON. Automation: set **`WAVE_SERVE_TOKEN`** (or `--token` on `wave serve` / `connect`) for `Authorization: Bearer`. CLI: `wave sql --url … --password` caches the cookie under `.wave/`. Optional: `WAVE_TRUST_PROXY=1` for `Secure` cookies behind TLS-terminating proxies.
 
 ## Platforms
 

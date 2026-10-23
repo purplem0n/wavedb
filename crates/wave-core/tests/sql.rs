@@ -769,6 +769,50 @@ fn create_view_select_and_drop() {
 }
 
 #[test]
+fn pk_increment_does_not_overwrite_destination_row() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE t (id INT PRIMARY KEY, v INT)");
+    q(&db, "INSERT INTO t VALUES (1, 10), (2, 20)");
+    let r = db.execute_sql("UPDATE t SET id = id + 1 WHERE id = 1", &[]);
+    assert!(r.is_err(), "expected unique violation when PK moves onto existing row");
+    assert_eq!(
+        q(&db, "SELECT id, v FROM t ORDER BY id"),
+        vec![vec![i(1), i(10)], vec![i(2), i(20)]]
+    );
+}
+
+#[test]
+fn view_expansion_cycle_is_rejected() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE VIEW v AS SELECT * FROM v");
+    let e = db.execute_sql("SELECT * FROM v", &[]).unwrap_err();
+    assert!(e.to_string().to_lowercase().contains("cycle"), "{e}");
+}
+
+#[test]
+fn begin_read_only_is_rejected() {
+    let (_d, db) = open_tmp();
+    let e = db.execute_sql("BEGIN READ ONLY", &[]).unwrap_err();
+    assert!(e.to_string().contains("READ ONLY"), "{e}");
+}
+
+#[test]
+fn guarded_increment_conflicts_when_predicate_fails_at_commit() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE inv (id INT PRIMARY KEY, stock INT)");
+    q(&db, "INSERT INTO inv VALUES (1, 5)");
+    let db = Arc::new(db);
+    let sql = "UPDATE inv SET stock = stock - 4 WHERE id = 1 AND stock >= 4";
+    let h1 = thread::spawn({ let db = db.clone(); move || db.execute_sql(sql, &[]) });
+    let h2 = thread::spawn({ let db = db.clone(); move || db.execute_sql(sql, &[]) });
+    let _ = h1.join().unwrap();
+    let _ = h2.join().unwrap();
+    let stock = q(&db, "SELECT stock FROM inv")[0][0].as_i64().unwrap();
+    assert!(stock >= 0, "stock must not go negative");
+    assert_eq!(stock, 1, "only one guarded decrement of 4 from 5 should apply");
+}
+
+#[test]
 fn foreign_key_rejects_orphan_insert() {
     let (_d, db) = open_tmp();
     q(&db, "CREATE TABLE fk_parent (id INT PRIMARY KEY)");

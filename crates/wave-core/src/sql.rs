@@ -158,7 +158,17 @@ fn conv_stmt(s: &a::Statement, cx: &mut Cx) -> Result<Statement> {
         a::Statement::Explain { statement, .. } => Ok(Statement::Explain {
             stmt: Box::new(conv_stmt(statement, cx)?),
         }),
-        a::Statement::StartTransaction { .. } => Ok(Statement::Begin),
+        a::Statement::StartTransaction { modes, .. } => {
+            for m in modes {
+                if matches!(
+                    m,
+                    a::TransactionMode::AccessMode(a::TransactionAccessMode::ReadOnly)
+                ) {
+                    return unsupported("READ ONLY transactions");
+                }
+            }
+            Ok(Statement::Begin)
+        }
         a::Statement::Commit { .. } => Ok(Statement::Commit),
         a::Statement::Rollback { .. } => Ok(Statement::Rollback),
         _ => unsupported("statement type"),

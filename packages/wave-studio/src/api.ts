@@ -124,7 +124,8 @@ export type AuthPhase = "setup" | "login" | "ready";
 
 export const authApi = {
   status: () => call<{ phase: AuthPhase; auth?: boolean }>("GET", "/auth/status"),
-  setup: (password: string) => call<{ ok: boolean }>("POST", "/auth/setup", { password }),
+  setup: (password: string, setupToken?: string) =>
+    call<{ ok: boolean }>("POST", "/auth/setup", { password, ...(setupToken ? { setupToken } : {}) }),
   login: (password: string) => call<{ ok: boolean }>("POST", "/auth/login", { password }),
   logout: () => call<{ ok: boolean }>("POST", "/auth/logout", {}),
 };

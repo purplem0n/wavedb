@@ -38,7 +38,9 @@ bun run seed:small:force                # wipe data/ and re-seed (~1k rows, all 
 
 ### Wave Studio (same port as the API)
 
-With `bun run dev` or `bun run start`, the app calls `app.use(waveHost(db, { dataPath }).hono())` — Studio at **`/wavedb-studio`**, HTTP API at **`/__wave/api`** (first visit: create superuser password; UI ships inside `@purplemon/wavedb`, no separate frontend build).
+With `bun run dev` or `bun run start`, the app calls `app.use(waveHost(db, { dataPath: wavePath }).hono())` — Studio at **`/wavedb-studio`**, HTTP API at **`/__wave/api`**, remote `connect()` base logged at startup as **`host.connectPath`**.
+
+First-time superuser auth: set **`WAVE_ADMIN_PASSWORD`** before boot, or use the one-time **`setupToken`** from `data.wave/.wave/setup.token` (or **`WAVE_SETUP_TOKEN`**) when calling `POST /__wave/api/auth/setup`. Set **`WAVE_TRUST_PROXY=1`** behind TLS-terminating proxies. Database path: **`WAVE_DB_PATH`** (legacy alias **`WAVE_PATH`**).
 
 Verify embed (monorepo workspace):
 

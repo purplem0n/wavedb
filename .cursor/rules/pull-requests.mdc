@@ -1,0 +1,11 @@
+---
+description: Use PRs for medium and large changes
+alwaysApply: true
+---
+
+# Pull requests
+
+- **Medium or large** changes (multi-file features, security fixes, API/auth behavior, engine changes, breaking changes) must use a feature branch and a **GitHub pull request** — not direct commits to `main`.
+- Default integration branch: **`dev`** → PR into **`main`** unless specified otherwise.
+- PR description must include **Summary**, **Test plan** (commands run), and a pointer to **CHANGELOG** `[Unreleased]`.
+- Small one-line fixes may commit to `dev` without a PR only when explicitly requested; when in doubt, open a PR.

@@ -13,3 +13,4 @@ bun.lock
 demo.wave/
 demo.wave/
 tools/bench/results.quick.json
+docs/purplem0n-wavedb-agent-findings.json

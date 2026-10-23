@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { connect, int, table, text, wave } from "@purplemon/wavedb";
-import { formatTable, parseArgs, run } from "../src/cli.ts";
+import { canonicalRemoteBase, formatTable, parseArgs, run } from "../src/cli.ts";
+import { createHash } from "node:crypto";
 import { cleanup, tmpDir } from "../../wavedb/test/helpers.ts";
 
 afterAll(cleanup);
@@ -158,6 +159,12 @@ describe("wave cli", () => {
     const auth = { headers: { authorization: "Bearer cli-secret" } };
     expect(await (await fetch(server.url + "/api/tables", auth)).json()).toEqual([]);
     await server.close();
+  });
+
+  test("cli session cache key uses full url digest", () => {
+    const hash = (u: string) => createHash("sha256").update(canonicalRemoteBase(u)).digest("hex");
+    expect(hash("http://127.0.0.1:4401/__wave")).not.toBe(hash("http://127.0.0.1:4402/__wave"));
+    expect(canonicalRemoteBase("http://host/path/")).toBe(canonicalRemoteBase("http://host/path"));
   });
 
   test("unknown command / missing args", async () => {
