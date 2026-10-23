@@ -33,6 +33,8 @@ This note covers **behavior and API changes** from the security and correctness 
 
 **Setup race.** Concurrent `POST /api/auth/setup` requests: one succeeds, others receive 400. Only the winning password works for login.
 
+**Setup token.** On first boot (no `admin.json` and no `WAVE_ADMIN_PASSWORD`), the server creates `.wave/setup.token` under the database directory. `POST /api/auth/setup` requires `{ "password": "…", "setupToken": "…" }` matching that file or `WAVE_SETUP_TOKEN`. The token file is removed after successful setup. Pre-provision with `WAVE_ADMIN_PASSWORD` to skip web setup entirely.
+
 ## HTTP health and leader lease
 
 **Health payload.** Public `GET /api/health` returns:

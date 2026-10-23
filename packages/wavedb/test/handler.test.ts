@@ -3,7 +3,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createWaveHandler, waveHost } from "../src/server.ts";
 import { connect, int, table, text } from "../src/index.ts";
-import { cleanup, openTmp, tmpDir } from "./helpers.ts";
+import { cleanup, openTmp, postAuthSetup, tmpDir } from "./helpers.ts";
+import { WaveError } from "../src/errors.ts";
 
 afterAll(cleanup);
 
@@ -25,13 +26,7 @@ describe("createWaveHandler", () => {
       staticDir,
     });
     const base = "http://127.0.0.1";
-    const setup = await handler.fetch(
-      new Request(`${base}/wave/api/auth/setup`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ password: "supersecret1" }),
-      }),
-    );
+    const setup = await postAuthSetup(handler, `${base}/wave/api/auth/setup`, "supersecret1", dir);
     expect(setup.status).toBe(200);
     const login = await handler.fetch(
       new Request(`${base}/wave/api/auth/login`, {
@@ -142,6 +137,21 @@ describe("createWaveHandler", () => {
     expect((await handler.fetch(new Request("http://x/foo/..%2f..%2f..%2fetc/passwd"))).status).toBe(403);
     await handler.close();
     await db.close();
+  });
+
+  test("auth without dataPath throws", async () => {
+    const { db } = await openTmp({ schema });
+    const saved = db.dataPath;
+    const env = process.env.WAVE_DB_PATH;
+    delete process.env.WAVE_DB_PATH;
+    Object.defineProperty(db, "dataPath", { value: undefined, configurable: true });
+    try {
+      expect(() => createWaveHandler(db, { auth: true })).toThrow(WaveError);
+    } finally {
+      Object.defineProperty(db, "dataPath", { value: saved, configurable: true });
+      if (env !== undefined) process.env.WAVE_DB_PATH = env;
+      await db.close();
+    }
   });
 
   test("machine token with auth enabled", async () => {

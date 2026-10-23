@@ -1,5 +1,6 @@
 // Implementation of the `wave` commands. `run()` is pure enough to be unit-tested.
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -216,8 +217,24 @@ function isLockError(e: unknown): boolean {
   return msg.includes("lock") || msg.includes("already open") || msg.includes("resource busy") || msg.includes("would block");
 }
 
+/** Canonical remote base URL for CLI session cache keys (exported for tests). */
+export function canonicalRemoteBase(url: string): string {
+  let s = url.trim();
+  if (!s) return s;
+  s = s.replace(/\/+$/, "");
+  try {
+    const u = new URL(s.includes("://") ? s : `http://${s}`);
+    u.pathname = u.pathname.replace(/\/+$/, "") || "";
+    u.hash = "";
+    u.search = "";
+    return u.toString().replace(/\/+$/, "");
+  } catch {
+    return s.replace(/\/+$/, "");
+  }
+}
+
 function cliSessionPath(url: string): string {
-  const hash = Buffer.from(url).toString("base64url").slice(0, 32);
+  const hash = createHash("sha256").update(canonicalRemoteBase(url)).digest("hex");
   return join(process.cwd(), ".wave", `cli-${hash}.json`);
 }
 
@@ -244,11 +261,12 @@ async function loginRemoteToken(base: string, password: string): Promise<string>
 async function resolveRemoteToken(base: string, flags: Record<string, string | true>): Promise<string | undefined> {
   if (typeof flags.token === "string") return flags.token;
   if (process.env.WAVE_SERVE_TOKEN) return process.env.WAVE_SERVE_TOKEN;
+  const canonical = canonicalRemoteBase(base);
   const cache = cliSessionPath(base);
   if (existsSync(cache)) {
     try {
-      const j = JSON.parse(readFileSync(cache, "utf8")) as { token?: string };
-      if (j.token) return j.token;
+      const j = JSON.parse(readFileSync(cache, "utf8")) as { token?: string; url?: string };
+      if (j.token && j.url === canonical) return j.token;
     } catch {
       /* ignore */
     }
@@ -256,7 +274,7 @@ async function resolveRemoteToken(base: string, flags: Record<string, string | t
   if (typeof flags.password === "string") {
     const token = await loginRemoteToken(base, flags.password);
     mkdirSync(dirname(cache), { recursive: true });
-    writeFileSync(cache, JSON.stringify({ token, url: base }), { mode: 0o600 });
+    writeFileSync(cache, JSON.stringify({ token, url: canonical }), { mode: 0o600 });
     return token;
   }
   return undefined;

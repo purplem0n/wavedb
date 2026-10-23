@@ -2,7 +2,7 @@
 
 Concurrent-write embedded relational database for TypeScript — MVCC + optimistic concurrency, typed schema and query builders, SQL, transactions, Studio, and HTTP `serve()` / `connect()`. One Rust core; runs on **Node ≥ 20** and **Bun ≥ 1.1**.
 
-More detail (architecture, benchmarks, monorepo dev): [docs/overview.md](docs/overview.md).
+More detail (architecture, benchmarks, monorepo dev): [docs/overview.md](docs/overview.md). Release notes: [CHANGELOG.md](CHANGELOG.md).
 
 ## Read & write
 

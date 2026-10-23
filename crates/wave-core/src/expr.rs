@@ -936,28 +936,28 @@ fn binop(op: BinOp, a: Value, b: Value) -> Result<Value> {
 pub fn like_match(s: &str, pat: &str) -> bool {
     let s: Vec<char> = s.chars().collect();
     let p: Vec<char> = pat.chars().collect();
-    let (mut i, mut j) = (0usize, 0usize);
-    let (mut star, mut mark) = (None::<usize>, 0usize);
-    while i < s.len() {
-        if j < p.len() && (p[j] == '_' || p[j] == s[i]) && p[j] != '%' {
-            i += 1;
-            j += 1;
-        } else if j < p.len() && p[j] == '%' {
-            star = Some(j);
-            mark = i;
-            j += 1;
-        } else if let Some(st) = star {
-            j = st + 1;
-            mark += 1;
-            i = mark;
-        } else {
-            return false;
+    let (m, n) = (s.len(), p.len());
+    let mut dp = vec![false; n + 1];
+    dp[n] = true;
+    for j in (0..n).rev() {
+        if p[j] == '%' {
+            dp[j] = dp[j + 1];
         }
     }
-    while j < p.len() && p[j] == '%' {
-        j += 1;
+    for i in (0..m).rev() {
+        let mut next = vec![false; n + 1];
+        for j in (0..n).rev() {
+            if p[j] == '%' {
+                next[j] = next[j + 1] || dp[j];
+            } else if p[j] == '_' {
+                next[j] = if i + 1 <= m { dp[j + 1] } else { false };
+            } else {
+                next[j] = i + 1 <= m && s[i] == p[j] && dp[j + 1];
+            }
+        }
+        dp = next;
     }
-    j == p.len()
+    dp[0]
 }
 
 fn text_arg(v: &Value, f: &str) -> Result<String> {

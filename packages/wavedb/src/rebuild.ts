@@ -33,7 +33,11 @@ async function copyRows(
 ): Promise<void> {
   const m = tableMeta(table);
   const haveByName = new Map(existing.columns.map((c) => [c.name, c]));
-  const sel = await exec.runSql(`SELECT * FROM ${fromTable}`, []);
+  const sel = await exec.run({
+    kind: "select",
+    columns: [{ t: "star" }],
+    from: { name: fromTable },
+  });
   const colIndex = new Map(sel.columns.map((c, i) => [c, i]));
   for (const row of sel.rows) {
     const values = m.columns.map((c) => {

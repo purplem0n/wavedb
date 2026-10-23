@@ -1,0 +1,12 @@
+---
+description: Keep hono-marketplace aligned with @purplemon/wavedb
+globs: examples/hono-marketplace/**
+alwaysApply: false
+---
+
+# Example project (hono-marketplace)
+
+- When changing WaveDB public API, auth, env vars, embed paths (`waveHost`, Studio, `connect`), or deployment docs, update **`examples/hono-marketplace`** in the same PR so it stays a copy-paste-ready reference.
+- Verify with `bun test` and `bun run test:studio` in the example directory when touching embed or auth.
+- Match documented env vars: `WAVE_DB_PATH`, `WAVE_ADMIN_PASSWORD`, `WAVE_SERVE_TOKEN`, `WAVE_SETUP_TOKEN`, `WAVE_TRUST_PROXY`.
+- **Do not** mention example-only updates in **CHANGELOG.md**.

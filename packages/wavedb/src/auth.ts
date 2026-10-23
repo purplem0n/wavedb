@@ -1,7 +1,7 @@
 // Superuser credentials and session auth for Wave HTTP / Studio (not app SQL tables).
 
 import { createHmac, randomBytes, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { IncomingMessage } from "node:http";
@@ -10,6 +10,7 @@ const scryptAsync = promisify(scrypt);
 
 const ADMIN_FILE = "admin.json";
 const SESSION_KEY_FILE = "session.key";
+const SETUP_TOKEN_FILE = "setup.token";
 const COOKIE_NAME = "wave_session";
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -34,7 +35,7 @@ export interface WaveAuth {
   cookiePath: string;
   hasAdmin(): boolean;
   status(req?: IncomingMessage): { phase: "setup" | "login" | "ready"; authenticated?: boolean };
-  setup(password: string): Promise<void>;
+  setup(password: string, setupToken?: string): Promise<void>;
   login(password: string): Promise<string>;
   verifySession(token: string | undefined): boolean;
   parseCookie(header: string | undefined): string | undefined;
@@ -67,6 +68,75 @@ function readAdmin(dataPath: string): AdminRecord | undefined {
 
 function writeAdmin(dataPath: string, rec: AdminRecord): void {
   writeFileSync(join(waveDir(dataPath), ADMIN_FILE), JSON.stringify(rec, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+}
+
+function setupTokenPath(dataPath: string): string {
+  return join(waveDir(dataPath), SETUP_TOKEN_FILE);
+}
+
+/** Read one-time web setup token (tests / operators). */
+export function readSetupToken(dataPath: string): string | undefined {
+  const env = process.env.WAVE_SETUP_TOKEN;
+  if (env) return env;
+  const p = setupTokenPath(dataPath);
+  if (!existsSync(p)) return undefined;
+  try {
+    return readFileSync(p, "utf8").trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function tokensEqual(a: string, b: string): boolean {
+  try {
+    const x = Buffer.from(a);
+    const y = Buffer.from(b);
+    if (x.length !== y.length) return false;
+    return timingSafeEqual(x, y);
+  } catch {
+    return false;
+  }
+}
+
+function verifySetupToken(dataPath: string, provided: string): boolean {
+  if (!provided) return false;
+  const env = process.env.WAVE_SETUP_TOKEN;
+  if (env && tokensEqual(provided, env)) return true;
+  const p = setupTokenPath(dataPath);
+  if (!existsSync(p)) return false;
+  try {
+    const want = readFileSync(p, "utf8").trim();
+    return tokensEqual(provided, want);
+  } catch {
+    return false;
+  }
+}
+
+function consumeSetupTokenFile(dataPath: string): void {
+  const p = setupTokenPath(dataPath);
+  if (existsSync(p)) {
+    try {
+      unlinkSync(p);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** Create `.wave/setup.token` when no admin and no env bootstrap (exclusive). */
+function ensureSetupTokenFile(dataPath: string): void {
+  if (readAdmin(dataPath)) return;
+  if (process.env.WAVE_ADMIN_PASSWORD) return;
+  if (process.env.WAVE_SETUP_TOKEN) return;
+  const p = setupTokenPath(dataPath);
+  if (existsSync(p)) return;
+  const token = randomBytes(32).toString("hex");
+  try {
+    writeFileSync(p, token + "\n", { flag: "wx", mode: 0o600 });
+    console.error(`[wavedb] First-time setup: use setupToken from ${p} (or set WAVE_SETUP_TOKEN) for POST /api/auth/setup`);
+  } catch {
+    /* concurrent creator */
+  }
 }
 
 function sessionSecret(dataPath: string): Buffer {
@@ -152,6 +222,7 @@ export function initWaveAuth(dataPath: string, opts: WaveAuthOptions = {}): Wave
       admin = readAdmin(dataPath);
     }
   }
+  ensureSetupTokenFile(dataPath);
 
   const checkPassword = async (password: string): Promise<boolean> => {
     const a = readAdmin(dataPath);
@@ -179,8 +250,9 @@ export function initWaveAuth(dataPath: string, opts: WaveAuthOptions = {}): Wave
       if (req && this.authorize(req)) return { phase: "ready" as const };
       return { phase: "login" as const };
     },
-    async setup(password: string) {
+    async setup(password: string, setupToken?: string) {
       if (readAdmin(dataPath)) throw new Error("admin already exists");
+      if (!verifySetupToken(dataPath, setupToken ?? "")) throw new Error("invalid or missing setup token");
       if (!password || password.length < 8) throw new Error("password must be at least 8 characters");
       checkRateLimit("setup");
       const salt = randomBytes(16).toString("hex");
@@ -191,6 +263,7 @@ export function initWaveAuth(dataPath: string, opts: WaveAuthOptions = {}): Wave
       };
       try {
         writeAdmin(dataPath, rec);
+        consumeSetupTokenFile(dataPath);
       } catch {
         throw new Error("admin already exists");
       }
@@ -224,7 +297,11 @@ export function initWaveAuth(dataPath: string, opts: WaveAuthOptions = {}): Wave
       return parts.join("; ");
     },
     isSecureRequest(req: IncomingMessage) {
-      if (trustProxy && req.headers["x-forwarded-proto"] === "https") return true;
+      if (trustProxy) {
+        const raw = req.headers["x-forwarded-proto"];
+        const proto = (Array.isArray(raw) ? raw[0] : raw)?.split(",")[0]?.trim().toLowerCase();
+        if (proto === "https") return true;
+      }
       return false;
     },
     authorize(req: IncomingMessage) {

@@ -37,6 +37,19 @@ describe("schema rebuild migrations", () => {
     await d2.close();
   });
 
+  test("rebuild copies rows from dotted table name", async () => {
+    const dotted = table("shop.items", { id: int().primaryKey(), v: int().notNull() });
+    const { db: d1, dir } = await openTmp({ schema: { "shop.items": dotted } });
+    await d1.insert(dotted).values({ id: 1, v: 7 });
+    await d1.close();
+
+    const dotted2 = table("shop.items", { id: int().primaryKey(), v: text().notNull() });
+    const d2 = await wave(`${dir}/data.wave`, { schema: { "shop.items": dotted2 }, push: false });
+    await d2.push({ allowDestructive: true });
+    expect((await d2.select().from(dotted2))[0]!.v).toBe("7");
+    await d2.close();
+  });
+
   test("primary key change rebuild preserves rows", async () => {
     const v1 = table("t", { id: int().primaryKey(), label: text().notNull() });
     const { db: d1, dir } = await openTmp({ schema: { t: v1 } });

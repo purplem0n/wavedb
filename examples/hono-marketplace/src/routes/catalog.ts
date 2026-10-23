@@ -239,14 +239,27 @@ catalog.get("/customers/:id/orders", async (c) => {
   return c.json({ data });
 });
 
+const MAX_ORDER_QTY = 1_000_000;
+
+function positiveOrderInt(n: unknown, max = MAX_ORDER_QTY): number | null {
+  if (typeof n !== "number" || !Number.isInteger(n) || n <= 0 || n > max) return null;
+  return n;
+}
+
 catalog.post("/orders", async (c) => {
   const db = c.get("db");
   const body = await c.req.json<{ customerId: number; lines: { productId: number; qty: number }[] }>();
-  if (!body.customerId || !Array.isArray(body.lines) || body.lines.length === 0) {
+  const customerId = positiveOrderInt(body.customerId);
+  if (!customerId || !Array.isArray(body.lines) || body.lines.length === 0) {
     return c.json({ error: "invalid_body" }, 400);
   }
+  for (const line of body.lines) {
+    if (positiveOrderInt(line.productId) === null || positiveOrderInt(line.qty) === null) {
+      return c.json({ error: "invalid_line" }, 400);
+    }
+  }
 
-  const customer = await db.select({ id: customers.id }).from(customers).where(eq(customers.id, body.customerId)).first();
+  const customer = await db.select({ id: customers.id }).from(customers).where(eq(customers.id, customerId)).first();
   if (!customer) return c.json({ error: "customer_not_found" }, 404);
 
   let created: { id: number; ref: string; total: number } | undefined;
@@ -267,7 +280,7 @@ catalog.post("/orders", async (c) => {
       const inserted = await tx
         .insert(orders)
         .values({
-          customerId: body.customerId,
+          customerId,
           status: "pending",
           total,
           placedAt: new Date(),
@@ -293,7 +306,7 @@ catalog.post("/orders", async (c) => {
           throw new Error("insufficient_stock");
         }
       }
-      await tx.update(customers).set({ lifetimeValue: inc(total) }).where(eq(customers.id, body.customerId));
+      await tx.update(customers).set({ lifetimeValue: inc(total) }).where(eq(customers.id, customerId));
       created = { id: orderId, ref, total };
     });
   } catch (e) {
@@ -315,6 +328,11 @@ catalog.patch("/orders/:id/status", async (c) => {
 
   const existing = await db.select({ id: orders.id, status: orders.status, total: orders.total, customerId: orders.customerId }).from(orders).where(eq(orders.id, id)).first();
   if (!existing) return c.json({ error: "not_found" }, 404);
+
+  const terminal = new Set(["cancelled", "delivered"]);
+  if (terminal.has(existing.status) && body.status !== existing.status) {
+    return c.json({ error: "invalid_transition" }, 409);
+  }
 
   if (body.status === "cancelled" && existing.status !== "cancelled") {
     await db.tx(async (tx) => {

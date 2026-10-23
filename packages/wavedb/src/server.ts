@@ -7,6 +7,8 @@ import { extname, join, normalize, resolve, sep } from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { WaveError, mapNativeError } from "./errors.ts";
 import type { Database, TxBackend } from "./db.ts";
+import { defaultWavePath } from "./db.ts";
+import type { TLSSocket } from "node:tls";
 import { acquireLeaderLease, startLeaderRenewal, type LeaderLease } from "./leader.ts";
 import { initWaveAuth, normalizePrefix, type WaveAuth } from "./auth.ts";
 import { wavedbPackageVersion } from "./pkgVersion.ts";
@@ -191,12 +193,20 @@ function embedStudioIndex(html: string, staticPrefix: string, apiPrefix: string)
 const MAX_OPEN_TX = 256;
 
 function isHttps(request: Request | IncomingMessage, waveAuth?: WaveAuth): boolean {
-  if (waveAuth && "headers" in request) {
-    return waveAuth.isSecureRequest(request as IncomingMessage);
-  }
   if (request instanceof Request) {
-    return new URL(request.url).protocol === "https:";
+    if (new URL(request.url).protocol === "https:") return true;
+    if (
+      waveAuth?.isSecureRequest({
+        headers: { "x-forwarded-proto": request.headers.get("x-forwarded-proto") ?? undefined },
+      } as unknown as IncomingMessage)
+    ) {
+      return true;
+    }
+    return false;
   }
+  const sock = request.socket as TLSSocket | undefined;
+  if (sock?.encrypted) return true;
+  if (waveAuth?.isSecureRequest(request)) return true;
   return false;
 }
 
@@ -205,11 +215,17 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
   const staticDir = opts.staticDir ? resolve(opts.staticDir) : undefined;
   const apiPrefix = normalizePrefix(opts.apiPrefix ?? "/api") || "/api";
   const staticPrefix = opts.staticPrefix ?? "/";
-  const authEnabled = opts.auth ?? !!opts.dataPath;
+  const resolvedDataPathRaw =
+    opts.dataPath ?? db.dataPath ?? (process.env.WAVE_DB_PATH ? defaultWavePath() : undefined);
+  const resolvedDataPath = resolvedDataPathRaw ? resolve(resolvedDataPathRaw) : undefined;
+  const authEnabled = opts.auth ?? !!resolvedDataPath;
+  if (authEnabled && !resolvedDataPath) {
+    throw new WaveError("auth requires a database dataPath (set dataPath, open wave() with a path, or WAVE_DB_PATH)", "WAVE_INVALID");
+  }
   const cookiePath = apiPrefix || "/api";
   const waveAuth: WaveAuth | undefined =
-    authEnabled && opts.dataPath
-      ? initWaveAuth(resolve(opts.dataPath), {
+    authEnabled && resolvedDataPath
+      ? initWaveAuth(resolvedDataPath, {
           machineToken: opts.token,
           cookiePath,
           trustProxy: process.env.WAVE_TRUST_PROXY === "1",
@@ -221,14 +237,14 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
   let leader: LeaderLease | undefined;
   let active = true;
 
-  if (opts.leader && opts.dataPath) {
-    const got = acquireLeaderLease({ dataPath: resolve(opts.dataPath) });
+  if (opts.leader && resolvedDataPath) {
+    const got = acquireLeaderLease({ dataPath: resolvedDataPath });
     if (!got.ok) {
       if (!opts.standby) throw new WaveError(got.reason ?? "not leader", "WAVE_INVALID");
       active = false;
     } else if (got.lease) {
       leader = got.lease;
-      stopLeader = startLeaderRenewal({ dataPath: resolve(opts.dataPath) }, leader.holder);
+      stopLeader = startLeaderRenewal({ dataPath: resolvedDataPath }, leader.holder);
     }
   }
 
@@ -295,7 +311,7 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       if (!waveAuth) return jsonResponse(400, { error: { code: "WAVE_INVALID", message: "auth disabled" } });
       try {
         const password = String(body.password ?? "");
-        await waveAuth.setup(password);
+        await waveAuth.setup(password, String(body.setupToken ?? ""));
         const token = await waveAuth.login(password);
         return jsonResponse(200, { ok: true }, { "set-cookie": waveAuth.sessionCookie(token, secure) });
       } catch (e) {
