@@ -19,7 +19,7 @@ pub struct DbTxn {
     txn: Txn,
     tables: HashMap<String, Arc<TableDef>>,
     /// Pending integer column deltas merged at commit (conflict-free under lock).
-    commutative: HashMap<Vec<u8>, (Arc<TableDef>, Vec<Value>, HashMap<usize, i64>, Option<BExpr>)>,
+    commutative: HashMap<Vec<u8>, (Arc<TableDef>, Vec<Value>, Vec<(HashMap<usize, i64>, Option<BExpr>)>)>,
 }
 
 enum SourceKind {
@@ -913,6 +913,14 @@ fn int_increment_delta(e: &BExpr, col: usize) -> Option<i64> {
             }
             None
         }
+        BExpr::Bin(BinOp::Sub, l, r) => {
+            if matches!(l.as_ref(), BExpr::Col(p) if *p == col) {
+                if let BExpr::Lit(Value::Int(d)) = r.as_ref() {
+                    return Some(-*d);
+                }
+            }
+            None
+        }
         _ => None,
     }
 }
@@ -1095,7 +1103,7 @@ impl DbTxn {
         if !self.commutative.is_empty() {
             let pending = std::mem::take(&mut self.commutative);
             self.txn.on_commit(move |txn| {
-                for (_, (t, _old, deltas, where_)) in pending {
+                for (_, (t, _old, ops)) in pending {
                     let pk = t.pk_enc(&_old);
                     let rk = t.row_key(&pk);
                     let vis = txn.engine().visible_ts();
@@ -1103,20 +1111,28 @@ impl DbTxn {
                         Some(b) => t.decode_value(&b)?,
                         None => return Err(Error::NotFound(format!("row missing for {}", t.name))),
                     };
-                    if let Some(w) = &where_ {
-                        if eval(w, &cur, &[])?.truthy() != Some(true) {
-                            return Err(Error::Conflict(format!(
-                                "conditional update predicate no longer satisfied on \"{}\"",
-                                t.name
-                            )));
+                    if cur != _old {
+                        return Err(Error::Conflict(format!(
+                            "row on \"{}\" changed since this transaction read it",
+                            t.name
+                        )));
+                    }
+                    let mut row = cur.clone();
+                    for (deltas, where_) in ops {
+                        if let Some(w) = &where_ {
+                            if eval(w, &row, &[])?.truthy() != Some(true) {
+                                return Err(Error::Conflict(format!(
+                                    "conditional update predicate no longer satisfied on \"{}\"",
+                                    t.name
+                                )));
+                            }
+                        }
+                        for (p, d) in deltas {
+                            let n = row[p].as_i64().unwrap_or(0).saturating_add(d);
+                            row[p] = Value::Int(n);
                         }
                     }
-                    let mut new = cur.clone();
-                    for (p, d) in deltas {
-                        let n = new[p].as_i64().unwrap_or(0).saturating_add(d);
-                        new[p] = Value::Int(n);
-                    }
-                    apply_row_update(txn, &t, &cur, &new)?;
+                    apply_row_update(txn, &t, &cur, &row)?;
                     txn.mark_commutative_key(rk);
                 }
                 Ok(())
@@ -2111,14 +2127,24 @@ impl DbTxn {
                 let pk = t.pk_enc(&old);
                 let rk = t.row_key(&pk);
                 let mut new = old.clone();
+                let mut deltas = HashMap::new();
                 for (p, e) in &sets {
                     let d = int_increment_delta(e, *p).unwrap();
-                    let entry = self
-                        .commutative
-                        .entry(rk.clone())
-                        .or_insert_with(|| (t.clone(), old.clone(), HashMap::new(), wb.clone()));
-                    *entry.2.entry(*p).or_insert(0) += d;
-                    new[*p] = Value::Int(old[*p].as_i64().unwrap_or(0) + entry.2[p]);
+                    deltas.insert(*p, d);
+                }
+                let entry = self
+                    .commutative
+                    .entry(rk.clone())
+                    .or_insert_with(|| (t.clone(), old.clone(), Vec::new()));
+                entry.2.push((deltas, wb.clone()));
+                let mut sum: HashMap<usize, i64> = HashMap::new();
+                for (m, _) in &entry.2 {
+                    for (p, d) in m {
+                        *sum.entry(*p).or_insert(0) += d;
+                    }
+                }
+                for (p, total) in sum {
+                    new[p] = Value::Int(old[p].as_i64().unwrap_or(0).saturating_add(total));
                 }
                 self.check_row(&t, &mut new)?;
                 updated.push(new);

@@ -26,6 +26,7 @@ export function App() {
   const [gate, setGate] = useState<Gate>("loading");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [setupToken, setSetupToken] = useState("");
   const [tokenInput, setTokenInput] = useState(getToken());
   useEffect(() => {
     const on = () => setRoute(parseHash());
@@ -102,7 +103,11 @@ export function App() {
           setError("Passwords do not match.");
           return;
         }
-        await authApi.setup(password);
+        if (!setupToken.trim()) {
+          setError("Enter the one-time setup token from the server (.wave/setup.token or WAVE_SETUP_TOKEN).");
+          return;
+        }
+        await authApi.setup(password, setupToken.trim());
       } else {
         await authApi.login(password);
       }
@@ -133,7 +138,11 @@ export function App() {
             <WaveLogo className="brand-logo" />
             Wave Studio
           </h1>
-          <p>{gate === "setup" ? "Create the superuser password for this database." : "Sign in to continue."}</p>
+          <p>
+            {gate === "setup"
+              ? "Create the superuser password. Use the one-time setup token from the server log or .wave/setup.token."
+              : "Sign in to continue."}
+          </p>
           {error && (
             <p role="alert" className="alert alert--error">
               {error}
@@ -155,6 +164,14 @@ export function App() {
             />
             {gate === "setup" && (
               <>
+                <label htmlFor="setupToken">Setup token</label>
+                <input
+                  id="setupToken"
+                  type="password"
+                  value={setupToken}
+                  onChange={(e) => setSetupToken(e.target.value)}
+                  autoComplete="off"
+                />
                 <label htmlFor="confirm">Confirm password</label>
                 <input
                   id="confirm"

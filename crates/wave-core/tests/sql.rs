@@ -797,6 +797,20 @@ fn begin_read_only_is_rejected() {
 }
 
 #[test]
+fn commutative_conditional_updates_in_one_transaction_are_sequential() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE inv (id INT PRIMARY KEY, stock INT)");
+    q(&db, "INSERT INTO inv VALUES (1, 5)");
+    let mut tx = db.begin(Isolation::Snapshot);
+    tx.execute_sql("UPDATE inv SET stock = stock - 4 WHERE id = 1 AND stock >= 4", &[])
+        .unwrap();
+    tx.execute_sql("UPDATE inv SET stock = stock - 4 WHERE id = 1 AND stock >= 4", &[])
+        .unwrap();
+    assert!(tx.commit().is_err());
+    assert_eq!(q(&db, "SELECT stock FROM inv"), vec![vec![i(5)]]);
+}
+
+#[test]
 fn guarded_increment_conflicts_when_predicate_fails_at_commit() {
     let (_d, db) = open_tmp();
     q(&db, "CREATE TABLE inv (id INT PRIMARY KEY, stock INT)");

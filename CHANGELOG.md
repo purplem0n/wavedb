@@ -14,9 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Session cookies include `Secure` on HTTPS Fetch requests and direct TLS Node connections.
 - Wave HTTP handler fails closed when `auth` is enabled without a resolvable database `dataPath`.
-- CLI remote session cache keys use SHA-256 of the full canonical URL; cached tokens require an exact URL match.
-- Schema rebuild row copy uses structured SELECT so table names with dots are not misinterpreted as SQL qualification.
-- Engine: primary-key columns excluded from commutative `UPDATE` fast path; conditional increments re-check `WHERE` at commit; view expansion cycle detection; linear-time `LIKE` matching; `BEGIN READ ONLY` rejected instead of ignored.
+- CLI remote sessions are scoped to the full server URL; a cached token is not reused for a different host or path.
+- Schema rebuild preserves rows for table names that contain dots.
+- Engine: guarded integer updates (`col ± n`) re-check their `WHERE` clause at commit (including multiple updates in one transaction) and conflict if another transaction changed the row first; primary-key increments no longer overwrite other rows; self-referencing views return an error instead of looping; `BEGIN READ ONLY` is rejected; `LIKE` patterns without `%` stay linear-time.
+- Wave Studio first-time setup sends the one-time setup token with the password.
+- Hono marketplace example: order status changes run in one transaction with optimistic status checks; order lines reject null entries; `bun run studio` uses the same DB path as the app.
 
 ### Breaking
 

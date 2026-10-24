@@ -254,6 +254,7 @@ catalog.post("/orders", async (c) => {
     return c.json({ error: "invalid_body" }, 400);
   }
   for (const line of body.lines) {
+    if (!line || typeof line !== "object") return c.json({ error: "invalid_line" }, 400);
     if (positiveOrderInt(line.productId) === null || positiveOrderInt(line.qty) === null) {
       return c.json({ error: "invalid_line" }, 400);
     }
@@ -326,28 +327,52 @@ catalog.patch("/orders/:id/status", async (c) => {
   const allowed = new Set(["pending", "paid", "shipped", "delivered", "cancelled"]);
   if (!allowed.has(body.status)) return c.json({ error: "invalid_status" }, 400);
 
-  const existing = await db.select({ id: orders.id, status: orders.status, total: orders.total, customerId: orders.customerId }).from(orders).where(eq(orders.id, id)).first();
-  if (!existing) return c.json({ error: "not_found" }, 404);
-
   const terminal = new Set(["cancelled", "delivered"]);
-  if (terminal.has(existing.status) && body.status !== existing.status) {
-    return c.json({ error: "invalid_transition" }, 409);
-  }
-
-  if (body.status === "cancelled" && existing.status !== "cancelled") {
+  try {
     await db.tx(async (tx) => {
-      const items = await tx.select({ productId: orderItems.productId, qty: orderItems.qty }).from(orderItems).where(eq(orderItems.orderId, id));
-      for (const item of items) {
-        await tx.update(products).set({ stock: inc(item.qty) }).where(eq(products.id, item.productId));
+      const cur = await tx
+        .select({ id: orders.id, status: orders.status, total: orders.total, customerId: orders.customerId })
+        .from(orders)
+        .where(eq(orders.id, id))
+        .first();
+      if (!cur) throw new Error("not_found");
+      if (terminal.has(cur.status) && body.status !== cur.status) {
+        throw new Error("invalid_transition");
       }
-      await tx.update(orders).set({ status: "cancelled" }).where(eq(orders.id, id));
-      await tx.update(customers).set({ lifetimeValue: inc(-existing.total) }).where(eq(customers.id, existing.customerId));
-    });
-    return c.json({ ok: true });
-  }
 
-  const r = await db.update(orders).set({ status: body.status }).where(eq(orders.id, id));
-  if (r.rowsAffected === 0) return c.json({ error: "not_found" }, 404);
+      if (body.status === "cancelled") {
+        if (cur.status === "cancelled") return;
+        const u = await tx
+          .update(orders)
+          .set({ status: "cancelled" })
+          .where(and(eq(orders.id, id), eq(orders.status, cur.status)));
+        if (u.rowsAffected === 0) throw new Error("stale_status");
+        const items = await tx
+          .select({ productId: orderItems.productId, qty: orderItems.qty })
+          .from(orderItems)
+          .where(eq(orderItems.orderId, id));
+        for (const item of items) {
+          await tx.update(products).set({ stock: inc(item.qty) }).where(eq(products.id, item.productId));
+        }
+        await tx.update(customers).set({ lifetimeValue: inc(-cur.total) }).where(eq(customers.id, cur.customerId));
+        return;
+      }
+
+      const u = await tx
+        .update(orders)
+        .set({ status: body.status })
+        .where(and(eq(orders.id, id), eq(orders.status, cur.status)));
+      if (u.rowsAffected === 0) throw new Error("stale_status");
+    });
+  } catch (e) {
+    if (e instanceof Error) {
+      if (e.message === "not_found") return c.json({ error: "not_found" }, 404);
+      if (e.message === "invalid_transition" || e.message === "stale_status") {
+        return c.json({ error: e.message }, 409);
+      }
+    }
+    throw e;
+  }
   return c.json({ ok: true });
 });
 
