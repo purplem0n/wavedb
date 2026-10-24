@@ -2860,6 +2860,7 @@ code,
 
 .logs-page-chrome .page-head {
   margin-bottom: 0;
+  flex-wrap: wrap;
 }
 
 .logs-page-stats {
