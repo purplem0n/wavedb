@@ -20,6 +20,7 @@ export function DataGrid({
   schema,
   tableDef,
   editable,
+  editingCell,
   onCellDoubleClick,
   onEditRow,
 }: {
@@ -36,6 +37,8 @@ export function DataGrid({
   tableDef?: TableDef;
   /** When set with a primary key on `tableDef`, enables row/cell editing affordances. */
   editable?: boolean;
+  /** Highlights the in-grid cell while an inline edit popover is open. */
+  editingCell?: { row: number; col: string } | null;
   onCellDoubleClick?: (rowIndex: number, column: string) => void;
   onEditRow?: (rowIndex: number) => void;
 }) {
@@ -104,7 +107,7 @@ export function DataGrid({
               const typeHint = types?.[c];
               const numeric = typeHint && /int|real|float|numeric|decimal/i.test(typeHint);
               return (
-                <th key={c} scope="col" className={numeric ? "text-right" : undefined}>
+                <th key={c} scope="col">
                   {onSort ? (
                     <button type="button" className="th-sort" onClick={() => onSort(c)} aria-sort={active ? (sort!.desc ? "descending" : "ascending") : undefined}>
                       <span>{c}</span>
@@ -148,16 +151,19 @@ export function DataGrid({
                       ? relationsForCell(schema!, tableDef!, col, r, columns)
                       : [];
                   const fkCell = relations.length > 0;
+                  const isEditing = editingCell?.row === i && editingCell.col === col;
                   return (
                     <td
                       key={j}
                       className={[
                         v === null ? "null" : undefined,
-                        numeric ? "cell-num text-right" : j === 0 ? "cell-id" : undefined,
+                        numeric ? "cell-num" : j === 0 ? "cell-id" : undefined,
                         fkCell ? "fk-cell" : undefined,
+                        isEditing ? "cell-editing" : undefined,
                       ]
                         .filter(Boolean)
                         .join(" ")}
+                      aria-selected={isEditing || undefined}
                       title={fkCell ? undefined : editable ? "Double-click to edit" : display(v, typeHint)}
                       onDoubleClick={
                         editable && onCellDoubleClick && !fkCell

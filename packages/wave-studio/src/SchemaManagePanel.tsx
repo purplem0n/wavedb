@@ -39,7 +39,7 @@ export function SchemaManagePanel({
 
   return (
     <div className="schema-manage">
-      <h3 className="schema-manage-title">Manage table</h3>
+      <h3 className="schema-manage-title">Edit table</h3>
       {error && (
         <p role="alert" className="alert alert--error">
           {error}

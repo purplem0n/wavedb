@@ -49,9 +49,6 @@ export function TableFilterUi({
     <div className="ui-filter">
       <div className="ui-filter-head">
         <span className="ui-filter-label">Filters</span>
-        <button type="button" className="btn-secondary btn-sm" onClick={() => onChange([...rules, emptyRule(columns)])}>
-          Add filter
-        </button>
       </div>
       <div className="ui-filter-rules">
         {rules.map((rule, i) => {
