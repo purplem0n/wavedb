@@ -827,6 +827,40 @@ fn guarded_increment_conflicts_when_predicate_fails_at_commit() {
 }
 
 #[test]
+fn commutative_deferred_update_rejects_invalid_foreign_key_at_commit() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE fk_parent (id INT PRIMARY KEY)");
+    q(
+        &db,
+        "CREATE TABLE fk_child (id INT PRIMARY KEY, parent_id INT, FOREIGN KEY (parent_id) REFERENCES fk_parent(id))",
+    );
+    q(&db, "INSERT INTO fk_parent VALUES (1)");
+    q(&db, "INSERT INTO fk_child VALUES (1, 1)");
+    let e = db
+        .execute_sql("UPDATE fk_child SET parent_id = parent_id - 1 WHERE id = 1", &[])
+        .unwrap_err();
+    assert!(matches!(e, Error::Constraint(_)), "{e}");
+}
+
+#[test]
+fn commutative_returning_replays_deltas_in_order() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE lim (id INT PRIMARY KEY, n INT)");
+    q(
+        &db,
+        &format!("INSERT INTO lim VALUES (1, {})", i64::MAX),
+    );
+    let mut tx = db.begin(Isolation::Snapshot);
+    tx.execute_sql("UPDATE lim SET n = n + 1 WHERE id = 1", &[])
+        .unwrap();
+    let r = tx
+        .execute_sql("UPDATE lim SET n = n - 1 WHERE id = 1 RETURNING n", &[])
+        .unwrap();
+    assert_eq!(r.rows[0][0].as_i64(), Some(i64::MAX - 1));
+    tx.commit().unwrap();
+}
+
+#[test]
 fn foreign_key_rejects_orphan_insert() {
     let (_d, db) = open_tmp();
     q(&db, "CREATE TABLE fk_parent (id INT PRIMARY KEY)");

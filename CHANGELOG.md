@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Wave HTTP handler fails closed when `auth` is enabled without a resolvable database `dataPath`.
 - CLI remote sessions are scoped to the full server URL; a cached token is not reused for a different host or path.
 - Schema rebuild preserves rows for table names that contain dots.
-- Engine: guarded integer updates (`col ± n`) re-check their `WHERE` clause at commit (including multiple updates in one transaction) and conflict if another transaction changed the row first; primary-key increments no longer overwrite other rows; self-referencing views return an error instead of looping; `BEGIN READ ONLY` is rejected; `LIKE` patterns without `%` stay linear-time.
+- Engine: guarded integer updates (`col ± n`) re-check their `WHERE` clause at commit (including multiple updates in one transaction), validate foreign keys before write, and conflict if another transaction changed the row first; `RETURNING` previews match commit replay order; primary-key increments no longer overwrite other rows; self-referencing views return an error instead of looping; `BEGIN READ ONLY` is rejected; `LIKE` patterns without `%` stay linear-time.
 - Wave Studio first-time setup sends the one-time setup token with the password.
 - Hono marketplace example: order status changes run in one transaction with optimistic status checks; order lines reject null entries; `bun run studio` uses the same DB path as the app.
 
