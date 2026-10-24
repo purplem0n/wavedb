@@ -337,7 +337,11 @@ pub enum AlterAction {
     RenameTable { to: String },
     SetAutoIncrement { enabled: bool },
     AddForeignKey { fk: ForeignKeyDef },
-    DropConstraint { name: String, if_exists: bool },
+    DropConstraint {
+        name: String,
+        #[serde(alias = "ifExists")]
+        if_exists: bool,
+    },
 }
 
 fn valid_ident(n: &str) -> bool {

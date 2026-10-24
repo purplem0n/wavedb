@@ -252,12 +252,19 @@ export function diffSchema(
         },
       });
     }
+    const stillWantedFk = new Set(tables.flatMap((tt) => wantedForeignKeys(tt).map(fkKey)));
     for (const c of cur.columns) {
       if (needsRebuild) break;
       if (!wantCols.has(c.name)) {
-        const usedByInboundFk = existing.some((t) =>
-          (t.foreignKeys ?? []).some((fk) => fk.refTable === m.name && fk.refColumns.includes(c.name)),
-        );
+        const outboundBlocked = (cur.foreignKeys ?? []).some((fk) => fk.columns.includes(c.name) && !fk.name);
+        const usedByInboundFk =
+          outboundBlocked ||
+          existing.some((t) =>
+            (t.foreignKeys ?? []).some(
+              (fk) =>
+                fk.refTable === m.name && fk.refColumns.includes(c.name) && stillWantedFk.has(fkKey(fk)),
+            ),
+          );
         dropCols.push({
           op: "dropColumn",
           table: m.name,
