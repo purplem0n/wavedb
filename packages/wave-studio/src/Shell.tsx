@@ -2,11 +2,12 @@ import type { ReactNode } from "react";
 import type { TableDef } from "./api";
 import { Icon, RefreshIcon, TableRowIcon, WaveLogo } from "./icons";
 
-type Route = { page: "table"; name: string } | { page: "sql" } | { page: "schema" } | { page: "stats" };
+type Route = { page: "table"; name: string } | { page: "sql" } | { page: "schema" } | { page: "stats" } | { page: "logs" };
 
 const VIEW_NAV = [
   { page: "schema" as const, label: "Schema", hash: "#/schema", icon: "schema" },
   { page: "sql" as const, label: "SQL Console", hash: "#/sql", icon: "terminal" },
+  { page: "logs" as const, label: "Logs & Metrics", hash: "#/logs", icon: "list_alt" },
   { page: "stats" as const, label: "Stats", hash: "#/stats", icon: "speed" },
 ];
 
@@ -14,6 +15,7 @@ function breadcrumbLabel(route: Route): string {
   if (route.page === "table") return route.name;
   if (route.page === "sql") return "SQL console";
   if (route.page === "stats") return "Stats";
+  if (route.page === "logs") return "Logs & Metrics";
   return "Schema";
 }
 

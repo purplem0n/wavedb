@@ -1724,6 +1724,103 @@ code,
   font-size: 13px;
 }
 
+.metric-grid--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.logs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+  align-items: flex-end;
+}
+
+.logs-filter select,
+.logs-search input {
+  display: block;
+  margin-top: 4px;
+  min-width: 200px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--outline-variant);
+  background: var(--surface-container);
+  color: var(--on-surface);
+  font: inherit;
+}
+
+.logs-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-lg);
+  background: var(--surface-container-low);
+}
+
+.logs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.logs-table th,
+.logs-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--outline-variant);
+  vertical-align: top;
+}
+
+.logs-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-container-high);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--on-surface-variant);
+}
+
+.logs-sql {
+  max-width: 480px;
+  word-break: break-word;
+}
+
+.logs-empty {
+  text-align: center;
+  color: var(--on-surface-variant);
+  padding: var(--space-lg) !important;
+}
+
+.logs-row--err {
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+}
+
+.log-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.log-tag--read {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--primary);
+}
+
+.log-tag--write {
+  background: color-mix(in srgb, var(--tertiary) 22%, transparent);
+  color: var(--tertiary);
+}
+
+.log-tag--other {
+  background: var(--surface-container-highest);
+  color: var(--on-surface-variant);
+}
+
 @media (max-width: 760px) {
   .sidebar {
     position: relative;

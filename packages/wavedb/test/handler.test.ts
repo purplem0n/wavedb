@@ -57,6 +57,19 @@ describe("createWaveHandler", () => {
     expect(typeof runJson.durationMs).toBe("number");
     expect(runJson.durationMs!).toBeGreaterThanOrEqual(0);
 
+    const metrics = await handler.fetch(
+      new Request(`${base}/wave/api/query-metrics`, { headers: { authorization: `Bearer ${token}` } }),
+    );
+    expect(metrics.status).toBe(200);
+    expect(((await metrics.json()) as { totalReads: number }).totalReads).toBeGreaterThanOrEqual(1);
+
+    const log = await handler.fetch(
+      new Request(`${base}/wave/api/query-log?limit=5`, { headers: { authorization: `Bearer ${token}` } }),
+    );
+    expect(log.status).toBe(200);
+    const logJson = (await log.json()) as { entries: { sql: string }[] };
+    expect(logJson.entries.some((e) => e.sql.includes("count"))).toBe(true);
+
     const redirect = await handler.fetch(new Request(`${base}/wavedb-studio`));
     expect(redirect.status).toBe(308);
     expect(new URL(redirect.headers.get("location")!).pathname).toBe("/wavedb-studio/");

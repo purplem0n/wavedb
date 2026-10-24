@@ -37,6 +37,25 @@ export interface Stats {
   trackedWrites: number;
   diskBytes: number;
 }
+
+export type QueryKind = "read" | "write" | "other";
+
+export interface QueryLogEntry {
+  id: string;
+  at: number;
+  kind: QueryKind;
+  sql: string;
+  durationMs?: number;
+  rowsAffected?: number;
+  ok: boolean;
+  error?: string;
+}
+
+export interface QueryMetrics {
+  totalReads: number;
+  totalWrites: number;
+  totalOther: number;
+}
 export interface QueryResult {
   columns: string[];
   rows: unknown[][];
@@ -133,6 +152,14 @@ export const authApi = {
 export const api = {
   tables: () => call<TableDef[]>("GET", "/tables"),
   stats: () => call<Stats>("GET", "/stats"),
+  queryMetrics: () => call<QueryMetrics>("GET", "/query-metrics"),
+  queryLog: (opts?: { limit?: number; since?: string }) => {
+    const q = new URLSearchParams();
+    if (opts?.limit) q.set("limit", String(opts.limit));
+    if (opts?.since) q.set("since", opts.since);
+    const tail = q.toString();
+    return call<{ entries: QueryLogEntry[] }>("GET", tail ? `/query-log?${tail}` : "/query-log");
+  },
   sql: (sql: string, params: unknown[] = []) => call<QueryResult>("POST", "/run", { sql, params }),
   vacuum: () => call<{ removed: number }>("POST", "/vacuum", {}),
   compact: () => call<{ ok: boolean }>("POST", "/compact", {}),

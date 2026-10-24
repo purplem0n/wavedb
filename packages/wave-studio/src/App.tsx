@@ -3,16 +3,17 @@ import { ApiError, api, authApi, getToken, setToken, type AuthPhase, type TableD
 import { SchemaView } from "./SchemaView";
 import { Shell } from "./Shell";
 import { SqlConsole } from "./SqlConsole";
+import { LogsView } from "./LogsView";
 import { StatsView } from "./StatsView";
 import { TableView } from "./TableView";
 import { Icon, WaveLogo } from "./icons";
 
-type Route = { page: "table"; name: string } | { page: "sql" } | { page: "schema" } | { page: "stats" };
+type Route = { page: "table"; name: string } | { page: "sql" } | { page: "schema" } | { page: "stats" } | { page: "logs" };
 
 function parseHash(): Route {
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, ""));
   if (h.startsWith("table/")) return { page: "table", name: h.slice(6) };
-  if (h === "sql" || h === "schema" || h === "stats") return { page: h };
+  if (h === "sql" || h === "schema" || h === "stats" || h === "logs") return { page: h };
   return { page: "schema" };
 }
 
@@ -88,7 +89,7 @@ export function App() {
     document.title =
       route.page === "table"
         ? `${route.name} · Wave Studio`
-        : `${{ schema: "Schema", sql: "SQL console", stats: "Stats" }[route.page]} · Wave Studio`;
+        : `${{ schema: "Schema", sql: "SQL console", stats: "Stats", logs: "Logs & Metrics" }[route.page]} · Wave Studio`;
   }, [route]);
 
   const submitAuth = async (phase: AuthPhase) => {
@@ -227,6 +228,7 @@ export function App() {
       {route.page === "schema" && <SchemaView tables={tables} onOpen={(n) => go(`#/table/${encodeURIComponent(n)}`)} />}
       {route.page === "sql" && <SqlConsole onChanged={() => void refresh()} />}
       {route.page === "stats" && <StatsView onChanged={() => void refresh()} />}
+      {route.page === "logs" && <LogsView />}
       {route.page === "table" &&
         (current ? (
           <TableView table={current} tables={tables} version={version} />
