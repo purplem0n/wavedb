@@ -70,7 +70,7 @@ export function LogsView() {
   }, [entries, filter, search]);
 
   return (
-    <section aria-labelledby="logs-title">
+    <section className="view-page" aria-labelledby="logs-title">
       <div className="stats-banner">
         <div className="stats-banner-inner">
           <div>
@@ -78,7 +78,7 @@ export function LogsView() {
               <h1 id="logs-title" className="stats-title">
                 Logs &amp; Metrics
               </h1>
-              <span className="pill-version">live</span>
+              <span className="pill-live">LIVE</span>
             </div>
             <div className="stats-sub">
               <span>Query stream from this Wave server</span>

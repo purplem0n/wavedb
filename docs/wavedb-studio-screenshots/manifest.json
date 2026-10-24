@@ -5,33 +5,40 @@
     {
       "file": "auth-loading.png",
       "description": "Initial loading gate before auth/status resolves",
-      "setup": "Fresh DB with auth enabled; reload immediately after navigation"
+      "setup": "Navigate to Studio; screenshot while snapshot shows “Loading…” (same tab, do not wait for shell)"
     },
     {
       "file": "auth-setup.png",
-      "description": "First-time superuser setup form (password + setup token)",
-      "setup": "New data.wave with auth, no superuser yet; use setup token from .wave/setup.token"
+      "description": "First-time superuser setup form",
+      "setup": "One CLI: fresh db.wave with auth, no superuser — `wave studio <path> --port 4400 --no-open` only while capturing auth-* ; stop CLI after auth batch"
     },
     {
       "file": "auth-login.png",
       "description": "Sign-in form for existing superuser",
-      "setup": "DB with superuser configured; logged out / new session"
+      "setup": "Second temp DB with superuser configured via API; no session cookie"
     },
     {
       "file": "auth-token.png",
-      "description": "Bearer token connect screen (auth disabled / legacy token mode)",
-      "setup": "wave studio --no-auth or API auth:false"
+      "description": "Bearer token connect screen",
+      "setup": "CLI: `wave studio <path> --port 4400 --no-open --no-auth`"
     },
     {
       "file": "shell-schema-default.png",
-      "description": "Schema view — default landing, tables listed",
+      "description": "Schema view — tables listed",
       "route": "#/schema",
-      "setup": "Authenticated or token-connected; seeded tables visible in sidebar"
+      "setup": "Hono embed logged in (see README capture order)"
     },
     {
       "file": "shell-sql-console-empty.png",
       "description": "SQL console — empty editor, no result grid",
-      "route": "#/sql"
+      "route": "#/sql",
+      "setup": "Click Clear on SQL console before capture"
+    },
+    {
+      "file": "shell-sql-console-with-results.png",
+      "description": "SQL console — result grid after a read query",
+      "route": "#/sql",
+      "setup": "Run e.g. `SELECT id, sku, title FROM products LIMIT 5;` then capture with result table visible"
     },
     {
       "file": "shell-stats.png",
@@ -39,9 +46,16 @@
       "route": "#/stats"
     },
     {
-      "file": "shell-logs.png",
-      "description": "Logs & metrics view",
-      "route": "#/logs"
+      "file": "shell-logs-empty.png",
+      "description": "Logs & metrics — no queries yet (empty stream)",
+      "route": "#/logs",
+      "setup": "Capture on a fresh Wave server process before any SQL/table loads in that process, or restart hono dev once for this shot first"
+    },
+    {
+      "file": "shell-logs-with-queries.png",
+      "description": "Logs & metrics — query log rows and non-zero read metrics",
+      "route": "#/logs",
+      "setup": "After running SQL (same session): e.g. products SELECT in SQL console, then open #/logs and wait for poll (~1s)"
     },
     {
       "file": "table-products-browse.png",
@@ -50,31 +64,31 @@
     },
     {
       "file": "table-products-filter-panel.png",
-      "description": "Table browser — filter UI open on products",
-      "route": "#/table/products",
-      "setup": "Open table filter panel before capture"
+      "description": "Table browser — simple filter UI visible",
+      "route": "#/table/products"
     },
     {
       "file": "table-products-row-editor.png",
-      "description": "Table browser — row editor drawer/modal open",
+      "description": "Table browser — row editor open",
       "route": "#/table/products",
-      "setup": "Open edit on an existing row"
+      "setup": "Click Edit on first row"
     },
     {
       "file": "schema-manage-panel.png",
-      "description": "Schema page — schema manage panel visible",
+      "description": "Schema — Manage table panel on products",
       "route": "#/schema",
-      "setup": "Open schema manage / DDL panel if present in UI"
+      "setup": "Click Manage on products card; snapshot shows “Manage table” before screenshot"
     },
     {
       "file": "state-table-not-found.png",
-      "description": "Empty state when hash references missing table",
+      "description": "Missing table empty state",
       "route": "#/table/__missing_table__"
     },
     {
       "file": "embed-hono-marketplace.png",
-      "description": "Studio embedded at /wavedb-studio in hono-marketplace",
-      "setup": "bun run dev in examples/hono-marketplace; full page including app chrome if any"
+      "description": "Studio at /wavedb-studio (embedded host)",
+      "route": "#/schema",
+      "setup": "Same hono dev session as shell captures"
     }
   ]
 }

@@ -38,7 +38,7 @@ export function SchemaView({
 
   return (
     <div className="page-pad">
-      <header className="page-head">
+      <header className="page-head page-head--schema">
         <div>
           <div className="page-title-row">
             <h1 className="page-title">Schema</h1>
@@ -48,23 +48,24 @@ export function SchemaView({
             {tables.length} table{tables.length === 1 ? "" : "s"} defined in embedded engine
           </p>
         </div>
-        <div className="schema-head-actions">
-          <button type="button" className="btn-primary" onClick={() => setShowCreate((s) => !s)}>
+        <div className="page-head-toolbar">
+          <button type="button" className="btn-stitch-primary" onClick={() => setShowCreate((s) => !s)}>
+            {!showCreate && <Icon name="add" className="icon-sm" />}
             {showCreate ? "Cancel" : "New table"}
           </button>
-        </div>
-        <div className="search-wrap">
-          <Icon name="search" />
-          <input
-            className="search-input"
-            type="search"
-            placeholder="Filter tables by name..."
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <kbd className="search-kbd">⌘K</kbd>
+          <div className="search-wrap search-wrap--toolbar">
+            <Icon name="search" className="search-icon" />
+            <input
+              className="search-input search-input--toolbar"
+              type="search"
+              placeholder="Filter tables by name..."
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <kbd className="search-kbd search-kbd--hint">⌘K</kbd>
+          </div>
         </div>
       </header>
 
@@ -159,6 +160,7 @@ export function SchemaView({
                 }}
               />
             )}
+            <div className="schema-card-body">
             <table>
               <caption className="sr-only">Columns of {t.name}</caption>
               <thead>
@@ -197,6 +199,7 @@ export function SchemaView({
                 })}
               </tbody>
             </table>
+            </div>
             {t.indexes.length > 0 && (
               <div className="schema-indexes">
                 <h4>Indexes</h4>

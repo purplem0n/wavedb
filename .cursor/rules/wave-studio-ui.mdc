@@ -5,37 +5,36 @@ alwaysApply: true
 
 # Wave Studio UI (browser test + screenshots)
 
-When a change can affect Wave Studio **directly or indirectly**, exercise the dashboard in a real browser, fix UI regressions, and refresh the screenshot set under **`docs/wavedb-studio-screenshots/`**.
+When a change can affect Wave Studio **directly or indirectly**, exercise the dashboard in a real browser, fix regressions, and refresh **`docs/wavedb-studio-screenshots/`** per **`manifest.json`**.
 
 ## When this applies
 
-Treat Studio as in scope if you touch any of:
-
-- `packages/wave-studio/**` (UI, styles, routing)
-- `packages/wave-cli/**` (studio/dev serve, static paths, flags)
-- `packages/wavedb/**` (HTTP API, auth, embed host, copied `studio/` assets)
-- `scripts/copy-studio.mjs`, root `package.json` studio scripts
-- `crates/**` when behavior visible in Studio changes (SQL, schema, stats, logs, auth)
-- `examples/hono-marketplace/**` when embed path, auth, or Studio static hosting changes
-
-Skip browser work only for changes with **no** plausible Studio surface (e.g. pure replication docs with no API/UI tie-in).
+`packages/wave-studio/**`, `packages/wave-cli/**`, `packages/wavedb/**`, `scripts/copy-studio.mjs`, root studio scripts, `crates/**` when Studio-visible behavior changes, `examples/hono-marketplace/**` for embed/auth paths.
 
 ## Browser test (required)
 
-1. **Build Studio** if UI or static assets changed: `bun run test:studio` (or `cd packages/wave-studio && bunx vite build`).
-2. **Run a database with sample tables** (pick one):
-   - **CLI:** temp dir + `bun packages/wave-cli/src/main.ts studio <path>.wave --port 4400 --no-open --no-auth` (token gate only), or with auth to capture setup/login flows.
-   - **Embed:** `examples/hono-marketplace` — `bun run seed:small:force` then `bun run dev`, open `http://localhost:3000/wavedb-studio`.
-3. **Use browser automation:** prefer **`cursor-ide-browser`** (navigate, snapshot, screenshot, click) or **`plugin-devtools-for-agents-chrome-devtools`** (navigate, snapshot, screenshot, a11y/console checks). Do not rely on unit tests alone for layout, navigation, or auth gates.
-4. **Cover hash routes and gates** from `packages/wave-studio/src/App.tsx`: `#/schema`, `#/sql`, `#/stats`, `#/logs`, `#/table/<name>`; auth gates `loading`, `setup`, `login`, `token`; table filter, row editor, schema manage panel, and empty/error states when your change touches those flows.
-5. **Fix** broken navigation, console errors, failed API calls, layout/a11y regressions, and embed path issues before finishing the task.
-6. **Re-run** `bun run test:studio` after fixes; include Studio verification in PR **Test plan** when opening/updating the `dev` → `main` PR.
+1. Build if UI/static changed: `bun run test:studio`.
+2. **One primary server:** `examples/hono-marketplace` — `bun run seed:small:force` then `bun run dev` → `http://localhost:3000/wavedb-studio`. Use this for shell, table, SQL, logs, stats, embed shots.
+3. **Auth-only CLI (exception):** when `auth-*.png` need refresh, run **one** `bun packages/wave-cli/src/main.ts studio <temp.wave> --port 4400 --no-open` at a time; capture; **stop that process** before the next temp DB. Do **not** stack servers on 4401–4405 or run dev + multiple CLIs together.
+4. **Tooling:** **`cursor-ide-browser`** (or Chrome DevTools MCP). **No Playwright** or extra npm browser deps for this repo.
+5. **One browser tab.** `browser_lock` → viewport **1280×800** → **sequential** flow only: navigate → `browser_snapshot` (verify state) → interact → snapshot again → `browser_take_screenshot` → copy PNG into `docs/wavedb-studio-screenshots/`. Do not parallelize screenshot with navigation/clicks.
+6. Fix console errors, broken routes, and layout/a11y issues before finishing. Mention Studio checks in PR **Test plan** when applicable.
 
-## Screenshot directory (always keep current)
+## Empty vs populated UI
 
-- **Path:** `docs/wavedb-studio-screenshots/`
-- **Canonical list:** only filenames declared in **`manifest.json`** in that folder. **Do not** add timestamped, `-copy`, or duplicate variants; **overwrite** the canonical PNG when the scene changes.
-- **Naming:** `{area}-{detail}.png` (see README + manifest). Use the seeded **`products`** table (hono small seed) for table scenarios unless manifest specifies otherwise.
-- **Viewport:** 1280×800 unless manifest notes a variant.
-- After a Studio-affecting change, update every manifest scenario whose UI changed; remove entries from manifest only when the scenario is permanently dropped.
-- Commit updated PNGs with the code change (same PR on `dev`). Do **not** list screenshot-only updates in **CHANGELOG.md** unless shipped Studio behavior changed for users.
+Manifest entries that differ by data **must both** exist and be reproducible:
+
+- **Logs empty:** `#/logs` on a **fresh Wave process** (restart `bun run dev` once) **before** any SQL or table load in that process → `shell-logs-empty.png`.
+- **Logs populated:** in the same session, run a read query in **SQL console** (e.g. `SELECT … FROM products LIMIT 5`) or open `#/table/products`, then `#/logs` and wait for poll (~1s) → `shell-logs-with-queries.png`.
+- **SQL empty / with results:** Clear editor → `shell-sql-console-empty.png`; run a query with visible grid → `shell-sql-console-with-results.png`.
+
+Other views: capture error/empty states (`state-*`) and interactive overlays (filters, row editor, schema manage) as listed in the manifest.
+
+## Screenshot directory
+
+- Only filenames in **`docs/wavedb-studio-screenshots/manifest.json`** (+ README). Overwrite canonical files in place; no timestamps or `-copy` names.
+- Commit PNGs with the code change on `dev`. Skip **CHANGELOG** for screenshot-only updates unless user-facing Studio behavior changed.
+
+## Cleanup
+
+After capture or triage, stop any **extra** `wave studio` CLI processes you started. Do not leave multiple background studio servers running.

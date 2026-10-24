@@ -60,7 +60,7 @@ export function StatsView({ onChanged }: { onChanged: () => void }) {
     : [];
 
   return (
-    <section aria-labelledby="stats-title">
+    <section className="view-page view-page--stats" aria-labelledby="stats-title">
       <div className="stats-banner">
         <div className="stats-banner-inner">
           <div>
@@ -68,7 +68,7 @@ export function StatsView({ onChanged }: { onChanged: () => void }) {
               <h1 id="stats-title" className="stats-title">
                 Engine Stats
               </h1>
-              <span className="pill-version">live</span>
+              <span className="pill-live">LIVE</span>
             </div>
             <div className="stats-sub">
               <span>WaveDB Storage &amp; Transaction Engine</span>
