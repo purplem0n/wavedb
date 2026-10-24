@@ -296,6 +296,7 @@ code,
 .nav-table-link {
   flex: 1;
   min-width: 0;
+  align-self: stretch;
   display: flex;
   align-items: center;
   gap: var(--space-sm);
