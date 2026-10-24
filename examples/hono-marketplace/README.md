@@ -40,7 +40,7 @@ bun run seed:small:force                # wipe data/ and re-seed (~1k rows, all 
 
 With `bun run dev` or `bun run start`, the app calls `app.use(waveHost(db, { dataPath: wavePath }).hono())` — Studio at **`/wavedb-studio`**, HTTP API at **`/__wave/api`**, remote `connect()` base logged at startup as **`host.connectPath`**.
 
-First-time superuser auth: set **`WAVE_ADMIN_PASSWORD`** before boot, or use the one-time **`setupToken`** from `data.wave/.wave/setup.token` (or **`WAVE_SETUP_TOKEN`**) when calling `POST /__wave/api/auth/setup`. Set **`WAVE_TRUST_PROXY=1`** behind TLS-terminating proxies. Database path: **`WAVE_DB_PATH`** (legacy alias **`WAVE_PATH`**).
+First-time superuser auth: set **`WAVE_ADMIN_PASSWORD`** before boot, or use the one-time **`setupToken`** from `data.wave/.wave/setup.token` (or **`WAVE_SETUP_TOKEN`**) when calling `POST /__wave/api/auth/setup`. For remote **`connect()`** / automation without a browser session, set **`WAVE_SERVE_TOKEN`** and send `Authorization: Bearer`. Set **`WAVE_TRUST_PROXY=1`** behind TLS-terminating proxies. Database path: **`WAVE_DB_PATH`** (legacy alias **`WAVE_PATH`**). The **`bun run studio`** script uses the same path resolution as the app.
 
 Verify embed (monorepo workspace):
 

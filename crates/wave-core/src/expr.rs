@@ -934,6 +934,17 @@ fn binop(op: BinOp, a: Value, b: Value) -> Result<Value> {
 }
 
 pub fn like_match(s: &str, pat: &str) -> bool {
+    if !pat.contains('%') {
+        let sc: Vec<char> = s.chars().collect();
+        let pc: Vec<char> = pat.chars().collect();
+        if sc.len() != pc.len() {
+            return false;
+        }
+        return sc
+            .iter()
+            .zip(pc.iter())
+            .all(|(a, b)| *b == '_' || a == b);
+    }
     let s: Vec<char> = s.chars().collect();
     let p: Vec<char> = pat.chars().collect();
     let (m, n) = (s.len(), p.len());
