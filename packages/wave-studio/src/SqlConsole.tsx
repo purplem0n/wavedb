@@ -3,6 +3,12 @@ import { api, uiToEngineLatencyMs, type QueryResult } from "./api";
 import { DataGrid } from "./DataGrid";
 import { Icon } from "./icons";
 import { waveEngineVersionTag } from "./version";
+import {
+  deleteSavedQuery,
+  loadSavedQueries,
+  upsertSavedQuery,
+  type SavedQuery,
+} from "./sqlBookmarks";
 
 const HISTORY_KEY = "wave-studio-history";
 
@@ -18,6 +24,12 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
   const [uiLatencyMs, setUiLatencyMs] = useState<number | null>(null);
   const [running, setRunning] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [savedOpen, setSavedOpen] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saved, setSaved] = useState<SavedQuery[]>(() => loadSavedQueries());
+  const [activeSavedId, setActiveSavedId] = useState<string | null>(null);
+  const [saveName, setSaveName] = useState("");
+  const [saveDescription, setSaveDescription] = useState("");
   const [history, setHistory] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]");
@@ -27,19 +39,50 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
   });
   const ref = useRef<HTMLTextAreaElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
+  const savedRef = useRef<HTMLDivElement>(null);
+  const saveRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (initial !== undefined) setText(initial);
   }, [initial]);
 
   useEffect(() => {
-    if (!historyOpen) return;
+    if (!historyOpen && !savedOpen && !saveOpen) return;
     const close = (e: MouseEvent) => {
-      if (historyRef.current && !historyRef.current.contains(e.target as Node)) setHistoryOpen(false);
+      const t = e.target as Node;
+      if (historyOpen && historyRef.current && !historyRef.current.contains(t)) setHistoryOpen(false);
+      if (savedOpen && savedRef.current && !savedRef.current.contains(t)) setSavedOpen(false);
+      if (saveOpen && saveRef.current && !saveRef.current.contains(t)) setSaveOpen(false);
     };
     document.addEventListener("click", close);
     return () => document.removeEventListener("click", close);
-  }, [historyOpen]);
+  }, [historyOpen, savedOpen, saveOpen]);
+
+  function openSaveDialog(existing?: SavedQuery) {
+    setSaveName(existing?.name ?? "");
+    setSaveDescription(existing?.description ?? "");
+    setActiveSavedId(existing?.id ?? activeSavedId);
+    setSaveOpen(true);
+    setSavedOpen(false);
+  }
+
+  function commitSave() {
+    const sql = text.trim();
+    if (!sql) return;
+    try {
+      const row = upsertSavedQuery({
+        id: activeSavedId ?? undefined,
+        name: saveName,
+        description: saveDescription,
+        sql,
+      });
+      setSaved(loadSavedQueries());
+      setActiveSavedId(row.id);
+      setSaveOpen(false);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   const lines = useMemo(() => lineNumbers(text), [text]);
 
@@ -91,6 +134,97 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
           <p className="page-sub">One statement at a time.</p>
         </div>
         <div className="sql-toolbar-top">
+          <div className="history-menu-wrap" ref={savedRef}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={(e) => (e.stopPropagation(), setSavedOpen((o) => !o), setSaveOpen(false))}
+            >
+              <Icon name="bookmark" className="icon-sm" />
+              <span>Saved ({saved.length})</span>
+              <Icon name="expand_more" className="icon-sm" />
+            </button>
+            {savedOpen && (
+              <div className="history-menu history-menu--wide" role="menu">
+                <div className="history-menu-label">Saved queries (this database)</div>
+                {saved.length === 0 ? (
+                  <p className="history-menu-empty">No bookmarks yet.</p>
+                ) : (
+                  saved.map((q) => (
+                    <div key={q.id} className="saved-row">
+                      <button
+                        type="button"
+                        className="history-item saved-row-main"
+                        role="menuitem"
+                        onClick={() => {
+                          setText(q.sql);
+                          setActiveSavedId(q.id);
+                          setSavedOpen(false);
+                          ref.current?.focus();
+                        }}
+                      >
+                        <span className="saved-name">{q.name}</span>
+                        {q.description && <span className="saved-desc">{q.description}</span>}
+                      </button>
+                      <div className="saved-row-actions">
+                        <button type="button" className="btn-icon" title="Edit bookmark" onClick={() => openSaveDialog(q)}>
+                          <Icon name="edit" className="icon-sm" />
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-icon"
+                          title="Delete bookmark"
+                          onClick={() => {
+                            deleteSavedQuery(q.id);
+                            setSaved(loadSavedQueries());
+                            if (activeSavedId === q.id) setActiveSavedId(null);
+                          }}
+                        >
+                          <Icon name="delete" className="icon-sm" />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+          <div className="history-menu-wrap" ref={saveRef}>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={!text.trim()}
+              onClick={(e) => (e.stopPropagation(), openSaveDialog(saved.find((q) => q.id === activeSavedId)))}
+            >
+              <Icon name="save" className="icon-sm" />
+              <span>{activeSavedId ? "Update saved" : "Save query"}</span>
+            </button>
+            {saveOpen && (
+              <div className="history-menu history-menu--wide save-form" role="dialog" aria-label="Save SQL query">
+                <div className="history-menu-label">{activeSavedId ? "Update bookmark" : "New bookmark"}</div>
+                <label className="save-field">
+                  <span>Name</span>
+                  <input value={saveName} onChange={(e) => setSaveName(e.target.value)} required placeholder="Required" />
+                </label>
+                <label className="save-field">
+                  <span>Description</span>
+                  <input
+                    value={saveDescription}
+                    onChange={(e) => setSaveDescription(e.target.value)}
+                    placeholder="Optional"
+                  />
+                </label>
+                <div className="save-form-actions">
+                  <button type="button" className="btn-secondary" onClick={() => setSaveOpen(false)}>
+                    Cancel
+                  </button>
+                  <button type="button" className="btn-run" onClick={commitSave} disabled={!saveName.trim()}>
+                    Save
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
           <div className="history-menu-wrap" ref={historyRef}>
             <button type="button" className="btn-secondary" onClick={(e) => (e.stopPropagation(), setHistoryOpen((o) => !o))} disabled={history.length === 0}>
               <Icon name="history" className="icon-sm" />
