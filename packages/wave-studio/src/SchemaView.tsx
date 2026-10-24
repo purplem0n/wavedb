@@ -3,6 +3,7 @@ import { api, describeDefault, type TableDef } from "./api";
 import { Icon } from "./icons";
 import { waveEngineVersionTag } from "./version";
 import { CreateTablePanel, SchemaManagePanel } from "./SchemaManagePanel";
+import { StudioModal } from "./StudioModal";
 
 function bytesShort(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -111,12 +112,26 @@ export function SchemaView({
       </div>
 
       {showCreate && (
-        <CreateTablePanel
-          onDone={() => {
-            setShowCreate(false);
-            onSchemaChange?.();
-          }}
-        />
+        <StudioModal title="Create table" onClose={() => setShowCreate(false)}>
+          <CreateTablePanel
+            onDone={() => {
+              setShowCreate(false);
+              onSchemaChange?.();
+            }}
+          />
+        </StudioModal>
+      )}
+
+      {manageTable && tables.some((t) => t.name === manageTable) && (
+        <StudioModal title={`Manage ${manageTable}`} onClose={() => setManageTable(null)} wide>
+          <SchemaManagePanel
+            table={tables.find((t) => t.name === manageTable)!}
+            onDone={() => {
+              setManageTable(null);
+              onSchemaChange?.();
+            }}
+          />
+        </StudioModal>
       )}
 
       <div className="section-meta">
@@ -146,20 +161,11 @@ export function SchemaView({
                 <span className="schema-card-meta">
                   {t.columns.length} cols · {t.indexes.length} idx
                 </span>
-                <button type="button" className="btn-ghost" onClick={() => setManageTable(manageTable === t.name ? null : t.name)}>
-                  {manageTable === t.name ? "Close" : "Manage"}
+                <button type="button" className="btn-ghost" onClick={() => setManageTable(t.name)}>
+                  Manage
                 </button>
               </div>
             </div>
-            {manageTable === t.name && (
-              <SchemaManagePanel
-                table={t}
-                onDone={() => {
-                  setManageTable(null);
-                  onSchemaChange?.();
-                }}
-              />
-            )}
             <div className="schema-card-body">
             <table>
               <caption className="sr-only">Columns of {t.name}</caption>

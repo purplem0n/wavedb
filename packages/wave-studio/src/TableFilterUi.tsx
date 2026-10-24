@@ -47,7 +47,12 @@ export function TableFilterUi({
 
   return (
     <div className="ui-filter">
-      <span className="ui-filter-label">Filters</span>
+      <div className="ui-filter-head">
+        <span className="ui-filter-label">Filters</span>
+        <button type="button" className="btn-secondary btn-sm" onClick={() => onChange([...rules, emptyRule(columns)])}>
+          Add filter
+        </button>
+      </div>
       <div className="ui-filter-rules">
         {rules.map((rule, i) => {
           const col = columns.find((c) => c.name === rule.column) ?? columns[0]!;
@@ -99,9 +104,6 @@ export function TableFilterUi({
           );
         })}
       </div>
-      <button type="button" className="btn-ghost" onClick={() => onChange([...rules, emptyRule(columns)])}>
-        Add filter
-      </button>
     </div>
   );
 }

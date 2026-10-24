@@ -1131,6 +1131,19 @@ code,
   width: 100%;
 }
 
+.ui-filter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 11px;
+  min-height: 28px;
+}
+
 .ui-filter-label {
   font-size: 10px;
   font-weight: 600;
@@ -1163,8 +1176,9 @@ code,
 }
 
 .ui-filter-row input {
-  flex: 1;
-  min-width: 100px;
+  flex: 0 1 9rem;
+  max-width: 11rem;
+  min-width: 5rem;
 }
 
 .filter-bar label {
@@ -1691,6 +1705,69 @@ code,
   font-size: 11px;
   color: var(--on-surface-variant);
   z-index: 5;
+}
+
+.pager-footer-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.pager-footer-version {
+  font-size: 10px;
+  color: var(--outline);
+  white-space: nowrap;
+}
+
+.studio-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+  background: color-mix(in srgb, var(--scrim, #000) 45%, transparent);
+}
+
+.studio-modal {
+  width: min(100%, 28rem);
+  max-height: min(90vh, 640px);
+  overflow: auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--outline-variant);
+  background: var(--surface-container);
+  box-shadow: 0 16px 48px color-mix(in srgb, #000 25%, transparent);
+  outline: none;
+}
+
+.studio-modal--wide {
+  width: min(100%, 36rem);
+}
+
+.studio-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--outline-variant);
+}
+
+.studio-modal-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.studio-modal-close {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.studio-modal-body {
+  padding: var(--space-lg);
 }
 
 .pager-footer .accent {

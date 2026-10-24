@@ -52,14 +52,26 @@ export function tokenBeforeCursor(text: string, cursor: number): { prefix: strin
   return { prefix, start: cursor - prefix.length };
 }
 
-function tableNamesInQuery(sql: string): Set<string> {
+function tableNamesInQuery(sql: string, beforeCursor?: number): Set<string> {
+  const slice = beforeCursor === undefined ? sql : sql.slice(0, beforeCursor);
   const names = new Set<string>();
-  const re = /\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+"?([\w]+)"?/gi;
+  const re = /\b(?:FROM|JOIN|INTO|UPDATE)\s+(?:"([^"]+)"|([\w]+))/gi;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(sql))) {
-    names.add(m[1]!);
+  while ((m = re.exec(slice))) {
+    names.add((m[1] ?? m[2])!.replace(/""/g, '"'));
   }
   return names;
+}
+
+function lastFromTable(sql: string, cursor: number): string | null {
+  const head = sql.slice(0, cursor);
+  const re = /\bFROM\s+(?:"([^"]+)"|([\w]+))\s*(?:AS\s+([\w]+))?/gi;
+  let last: string | null = null;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(head))) {
+    last = (m[1] ?? m[2])!.replace(/""/g, '"');
+  }
+  return last;
 }
 
 export function sqlCompletions(text: string, cursor: number, tables: TableDef[], limit = 12): CompletionItem[] {
@@ -96,8 +108,14 @@ export function sqlCompletions(text: string, cursor: number, tables: TableDef[],
     }
   }
 
-  const inFrom = /\b(FROM|JOIN|INTO|UPDATE)\s+[\w".]*$/i.test(text.slice(0, cursor));
-  const inSelectList = /\bSELECT\s+[\w",.\s]*$/i.test(text.slice(0, cursor)) && !/\bFROM\b/i.test(text.slice(0, cursor));
+  const head = text.slice(0, cursor);
+  const inFrom = /\b(FROM|JOIN|INTO|UPDATE)\s+[\w".]*$/i.test(head);
+  const afterFrom = /\bFROM\b/i.test(head);
+  const inSelectList =
+    /\bSELECT\b/i.test(head) &&
+    afterFrom &&
+    !/\b(WHERE|GROUP\s+BY|ORDER\s+BY|LIMIT|HAVING)\b/i.test(head.slice(head.search(/\bFROM\b/i)));
+  const scopedFrom = lastFromTable(text, cursor);
 
   if (inFrom || needle.length > 0) {
     for (const t of tables) {
@@ -111,13 +129,22 @@ export function sqlCompletions(text: string, cursor: number, tables: TableDef[],
   }
 
   if (inSelectList || (!inFrom && needle.length > 0)) {
-    const scoped = tableNamesInQuery(text);
-    const scopedTables = scoped.size ? tables.filter((t) => scoped.has(t.name)) : tables;
+    const scoped = tableNamesInQuery(text, cursor);
+    let scopedTables = scoped.size ? tables.filter((t) => scoped.has(t.name)) : tables;
+    if (scopedFrom && scopedTables.some((t) => t.name === scopedFrom)) {
+      scopedTables = tables.filter((t) => t.name === scopedFrom);
+    }
     for (const t of scopedTables) {
       for (const c of t.columns) {
+        if (needle && !c.name.toLowerCase().startsWith(needle) && !`${t.name}.${c.name}`.toLowerCase().startsWith(needle)) {
+          continue;
+        }
         push({
-          label: `${t.name}.${c.name}`,
-          insert: `"${t.name.replace(/"/g, '""')}"."${c.name.replace(/"/g, '""')}"`,
+          label: scopedTables.length === 1 ? c.name : `${t.name}.${c.name}`,
+          insert:
+            scopedTables.length === 1
+              ? c.name
+              : `"${t.name.replace(/"/g, '""')}"."${c.name.replace(/"/g, '""')}"`,
           detail: c.type,
           kind: "column",
         });

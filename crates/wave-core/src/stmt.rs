@@ -161,6 +161,9 @@ pub enum Statement {
         name: String,
         #[serde(default)]
         if_exists: bool,
+        /// When true, drop tables that depend on this one via foreign keys.
+        #[serde(default)]
+        cascade: bool,
     },
     #[serde(rename_all = "camelCase")]
     CreateIndex {

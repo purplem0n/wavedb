@@ -117,7 +117,6 @@ export function TableView({
       <div className="table-page-head">
         <div className="table-title-block">
           <h1 id="table-title">{table.name}</h1>
-          <span className="pill-version">{waveEngineVersionTag()}</span>
           <div className="table-chips">
             <span className="chip">{total === null ? "…" : total.toLocaleString()} rows</span>
             <span className="chip">{table.columns.length} columns</span>
@@ -325,36 +324,39 @@ export function TableView({
       </div>
 
       <footer className="pager-footer">
-        <div>
+        <div className="pager-footer-meta">
           {total !== null && (
             <>
-              Showing {rowFrom.toLocaleString()} to {rowTo.toLocaleString()} of {total.toLocaleString()} rows
+              Showing {rowFrom.toLocaleString()}–{rowTo.toLocaleString()} of {total.toLocaleString()} rows
               {queryMs !== null && (
                 <>
                   {" "}
-                  • Query speed: <span className="accent">{queryMs.toFixed(2)}ms</span>
+                  · Query speed: <span className="accent">{queryMs.toFixed(2)}ms</span>
                 </>
               )}
               {uiLatencyMs !== null && (
                 <>
                   {" "}
-                  • UI latency: <span className="accent">{uiLatencyMs.toFixed(2)}ms</span>
+                  · UI latency: <span className="accent">{uiLatencyMs.toFixed(2)}ms</span>
                 </>
               )}
             </>
           )}
         </div>
-        <nav className="pager-controls" aria-label="Pagination">
-          <button type="button" className="btn-secondary" disabled={page === 0 || loading} onClick={() => setPage((p) => p - 1)}>
-            Previous
-          </button>
-          <span aria-live="polite">
-            Page {page + 1} of {pages.toLocaleString()}
-          </span>
-          <button type="button" className="btn-secondary" disabled={page + 1 >= pages || loading} onClick={() => setPage((p) => p + 1)}>
-            Next
-          </button>
-        </nav>
+        <div className="pager-footer-end">
+          <nav className="pager-controls" aria-label="Pagination">
+            <button type="button" className="btn-secondary" disabled={page === 0 || loading} onClick={() => setPage((p) => p - 1)}>
+              Previous
+            </button>
+            <span aria-live="polite">
+              Page {page + 1} of {pages.toLocaleString()}
+            </span>
+            <button type="button" className="btn-secondary" disabled={page + 1 >= pages || loading} onClick={() => setPage((p) => p + 1)}>
+              Next
+            </button>
+          </nav>
+          <span className="pager-footer-version">{waveEngineVersionTag()}</span>
+        </div>
       </footer>
     </section>
   );

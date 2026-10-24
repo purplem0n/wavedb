@@ -1194,8 +1194,12 @@ impl DbTxn {
                 self.tables.clear();
                 Ok(QueryResult::default())
             }
-            Statement::DropTable { name, if_exists } => {
-                catalog::drop_table(&mut self.txn, name, *if_exists)?;
+            Statement::DropTable {
+                name,
+                if_exists,
+                cascade,
+            } => {
+                catalog::drop_table(&mut self.txn, name, *if_exists, *cascade)?;
                 self.tables.clear();
                 Ok(QueryResult::default())
             }
