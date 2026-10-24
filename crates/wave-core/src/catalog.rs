@@ -420,10 +420,29 @@ fn fk_violation(child: &TableDef, fk: &ForeignKeyDef) -> Error {
 }
 
 /// Row-level FK enforcement (shared by DML and `ADD CONSTRAINT`).
+fn fk_references_own_primary_key(t: &TableDef, fk: &ForeignKeyDef, row: &[Value]) -> Result<bool> {
+    if fk.ref_table != t.name {
+        return Ok(false);
+    }
+    for (c, rc) in fk.columns.iter().zip(&fk.ref_columns) {
+        let cv = row[t.col_pos(c).unwrap()].clone();
+        let pk_pos = t
+            .col_pos(rc)
+            .ok_or_else(|| Error::NotFound(format!("column \"{rc}\" not found")))?;
+        if cv != row[pk_pos] {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 pub(crate) fn check_row_foreign_keys(txn: &mut Txn, t: &TableDef, row: &[Value]) -> Result<()> {
     for fk in &t.foreign_keys {
         let vals = fk_values(t, row, fk)?;
         if vals.iter().all(|v| v.is_null()) {
+            continue;
+        }
+        if fk_references_own_primary_key(t, fk, row)? {
             continue;
         }
         let parent = if fk.ref_table == t.name {

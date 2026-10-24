@@ -55,7 +55,7 @@ export function tokenBeforeCursor(text: string, cursor: number): { prefix: strin
 function tableNamesInQuery(sql: string, beforeCursor?: number): Set<string> {
   const slice = beforeCursor === undefined ? sql : sql.slice(0, beforeCursor);
   const names = new Set<string>();
-  const re = /\b(?:FROM|JOIN|INTO|UPDATE)\s+(?:"([^"]+)"|([\w]+))/gi;
+  const re = /\b(?:FROM|JOIN|(?:INNER|LEFT|RIGHT|FULL|CROSS)\s+JOIN|INTO|UPDATE)\s+(?:"([^"]+)"|([\w]+))/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(slice))) {
     names.add((m[1] ?? m[2])!.replace(/""/g, '"'));
@@ -144,7 +144,7 @@ export function sqlCompletions(text: string, cursor: number, tables: TableDef[],
         if (qualPrefix) {
           insert = `${qualPrefix}${c.name}`;
         } else if (scopedTables.length === 1) {
-          insert = c.name;
+          insert = /^\w+$/.test(c.name) ? c.name : `"${c.name.replace(/"/g, '""')}"`;
         } else {
           insert = `"${t.name.replace(/"/g, '""')}"."${c.name.replace(/"/g, '""')}"`;
         }

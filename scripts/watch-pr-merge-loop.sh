@@ -58,15 +58,24 @@ emit_wake() {
 }
 
 check_status() {
-  local ci_pending=0 ci_fail=0 bot_pending=0 bot_fail=0 bot_done=0
-  local line name status _rest
+  local ci_pending=0 ci_fail=0 ci_pass=0 bot_pending=0 bot_fail=0 bot_done=0
+  local line name status _rest checks_out
+
+  if ! checks_out=$(gh pr checks "$PR" 2>&1); then
+    echo "gh_error"
+    return 0
+  fi
 
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     name=$(printf '%s' "$line" | awk '{print $1}')
     status=$(printf '%s' "$line" | awk '{print $2}')
     case "$status" in
-      pass | success) ;;
+      pass | success)
+        for c in "${REQUIRED_CI[@]}"; do
+          [[ "$name" == "$c" ]] && ci_pass=$((ci_pass + 1))
+        done
+        ;;
       pending | queued | in_progress)
         if [[ "$name" == "$REQUIRED_BOT" ]]; then bot_pending=1; fi
         for c in "${REQUIRED_CI[@]}"; do
@@ -84,7 +93,7 @@ check_status() {
     if [[ "$name" == "$REQUIRED_BOT" ]] && [[ "$status" == "pass" || "$status" == "success" ]]; then
       bot_done=1
     fi
-  done < <(gh pr checks "$PR" 2>&1 || true)
+  done <<< "$checks_out"
 
   if [[ "$ci_fail" -eq 1 ]]; then
     echo "ci_fail"
@@ -94,7 +103,7 @@ check_status() {
     echo "coderabbit_fail"
     return 0
   fi
-  if [[ "$ci_pending" -eq 1 ]]; then
+  if [[ "$ci_pending" -eq 1 ]] || [[ "$ci_pass" -lt ${#REQUIRED_CI[@]} ]]; then
     echo "waiting_ci"
     return 0
   fi
@@ -143,6 +152,10 @@ while true; do
   case "$phase" in
     waiting_ci)
       maybe_watch_ci_run
+      ;;
+    gh_error)
+      emit_wake "gh_error" "PR #${PR} gh pr checks failed — retry triage; verify auth and network."
+      exit 0
       ;;
     ci_fail)
       emit_wake "ci_fail" "PR #${PR} CI failed — read logs, fix on dev, push, then re-arm watch or continue loop."

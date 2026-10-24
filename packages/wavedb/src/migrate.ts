@@ -255,18 +255,18 @@ export function diffSchema(
     for (const c of cur.columns) {
       if (needsRebuild) break;
       if (!wantCols.has(c.name)) {
-        const usedByFk =
-          (cur.foreignKeys ?? []).some((fk) => fk.columns.includes(c.name)) ||
-          existing.some((t) => (t.foreignKeys ?? []).some((fk) => fk.refTable === m.name && fk.refColumns.includes(c.name)));
+        const usedByInboundFk = existing.some((t) =>
+          (t.foreignKeys ?? []).some((fk) => fk.refTable === m.name && fk.refColumns.includes(c.name)),
+        );
         dropCols.push({
           op: "dropColumn",
           table: m.name,
           description: `drop column ${m.name}.${c.name}`,
           destructive: true,
-          applicable: !usedByFk,
+          applicable: !usedByInboundFk,
           statement: { kind: "alterTable", table: m.name, action: { op: "dropColumn", name: c.name } },
         });
-        if (usedByFk) {
+        if (usedByInboundFk) {
           adds.push({
             op: "conflict",
             table: m.name,
@@ -351,5 +351,5 @@ export function diffSchema(
       });
     }
   }
-  return [...creates, ...addFks, ...adds, ...dropFks, ...dropIdx, ...idx, ...dropCols, ...dropTables];
+  return [...creates, ...adds, ...dropIdx, ...idx, ...addFks, ...dropFks, ...dropCols, ...dropTables];
 }

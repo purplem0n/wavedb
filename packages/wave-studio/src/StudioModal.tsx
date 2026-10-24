@@ -22,6 +22,8 @@ export function StudioModal({
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const prevFocus = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     prevFocus.current = document.activeElement as HTMLElement | null;
@@ -33,7 +35,7 @@ export function StudioModal({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab" || !panel) return;
@@ -59,7 +61,7 @@ export function StudioModal({
       window.removeEventListener("keydown", onKey);
       prevFocus.current?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div className="studio-modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
