@@ -15,11 +15,11 @@ CodeRabbit’s GitHub integration is **unreliable**: it often **does not** resol
 
 **Whenever you implement, dismiss, or verify a CodeRabbit suggestion** (inline thread, outside-diff block, or summary item):
 
-1. **Resolve the matching GitHub review thread in the same pass** — in the same turn as the fix, before you arm the watcher or end the turn. Do **not** wait for CodeRabbit to close it.
+1. **Resolve the matching GitHub review thread after the fix is tested and pushed** — in the same turn as the fix, before you arm the watcher or end the turn. If no commit is needed, verify the existing code first. Do **not** wait for CodeRabbit to close it.
 2. If there is no thread (outside-diff-only), treat the item as done once code on HEAD satisfies it; do not re-implement on the next wake unless HEAD regressed.
 3. Optionally reply on the thread: `Fixed in <short-sha>` or `Already satisfied on HEAD`.
 
-**Order on each finding:** triage → fix (or dismiss) → **resolve thread** → commit/push → watcher. Never push a CodeRabbit fix and leave its thread open “for CodeRabbit.”
+**Order on each implemented fix:** triage → fix → test → commit/push → **resolve thread** → verify thread state → watcher. For a dismissal or an already-satisfied finding, verify it before resolving the thread. Never push a CodeRabbit fix and leave its thread open “for CodeRabbit.”
 
 ## Turn exit contract (mandatory for `/loop` and merge intent)
 
@@ -133,9 +133,9 @@ gh api repos/OWNER/REPO/pulls/N/reviews/<review_id> --jq .body
 For **each** CodeRabbit item you address in this wake:
 
 - Smallest correct diff on **`dev`**; run scoped tests.
-- **Immediately resolve** the linked review thread (mutation in **B**) once the fix is in the working tree or commit — **before** relying on the next CodeRabbit run.
 - Update root **CHANGELOG.md** `[Unreleased]` for user-facing package/crate changes.
 - Commit, push **`dev`**; **`gh pr edit`** if PR scope/title/body needs refresh.
+- **Resolve** the linked review thread (mutation in **B**) after the fix is on the remote PR head (or after verify-only dismiss).
 - Re-check **B**: any thread you fixed this turn must show `isResolved: true` before you start `./scripts/watch-pr-merge-loop.sh`.
 
 If code already matches the suggestion (no commit needed), **resolve the thread anyway** and do not re-edit.

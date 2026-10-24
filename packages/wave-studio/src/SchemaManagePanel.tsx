@@ -145,30 +145,32 @@ export function CreateTablePanel({ onDone }: { onDone: () => void }) {
         spellCheck={false}
         autoComplete="off"
       />
-      <p className="schema-field-hint">Primary key column</p>
-      <div className="schema-manage-row schema-manage-row--labeled">
-        <label className="schema-field-label schema-field-label--inline" htmlFor="create-pk-name">
-          Name
-        </label>
-        <input
-          id="create-pk-name"
-          value={col}
-          onChange={(e) => setCol(e.target.value)}
-          placeholder="id"
-          spellCheck={false}
-          autoComplete="off"
-        />
-        <label className="schema-field-label schema-field-label--inline" htmlFor="create-pk-type">
-          Type
-        </label>
-        <select id="create-pk-type" value={type} onChange={(e) => setType(e.target.value as ColumnTypeName)}>
-          {COLUMN_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-      </div>
+      <fieldset className="schema-field-group">
+        <legend className="schema-field-hint">Primary key column</legend>
+        <div className="schema-manage-row schema-manage-row--labeled">
+          <label className="schema-field-label schema-field-label--inline" htmlFor="create-pk-name">
+            Name
+          </label>
+          <input
+            id="create-pk-name"
+            value={col}
+            onChange={(e) => setCol(e.target.value)}
+            placeholder="id"
+            spellCheck={false}
+            autoComplete="off"
+          />
+          <label className="schema-field-label schema-field-label--inline" htmlFor="create-pk-type">
+            Type
+          </label>
+          <select id="create-pk-type" value={type} onChange={(e) => setType(e.target.value as ColumnTypeName)}>
+            {COLUMN_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </div>
+      </fieldset>
       <div className="schema-manage-actions">
         <button
           type="button"
