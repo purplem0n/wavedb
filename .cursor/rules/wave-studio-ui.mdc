@@ -1,0 +1,41 @@
+---
+description: Browser-test Wave Studio and keep docs/wavedb-studio-screenshots current
+alwaysApply: true
+---
+
+# Wave Studio UI (browser test + screenshots)
+
+When a change can affect Wave Studio **directly or indirectly**, exercise the dashboard in a real browser, fix UI regressions, and refresh the screenshot set under **`docs/wavedb-studio-screenshots/`**.
+
+## When this applies
+
+Treat Studio as in scope if you touch any of:
+
+- `packages/wave-studio/**` (UI, styles, routing)
+- `packages/wave-cli/**` (studio/dev serve, static paths, flags)
+- `packages/wavedb/**` (HTTP API, auth, embed host, copied `studio/` assets)
+- `scripts/copy-studio.mjs`, root `package.json` studio scripts
+- `crates/**` when behavior visible in Studio changes (SQL, schema, stats, logs, auth)
+- `examples/hono-marketplace/**` when embed path, auth, or Studio static hosting changes
+
+Skip browser work only for changes with **no** plausible Studio surface (e.g. pure replication docs with no API/UI tie-in).
+
+## Browser test (required)
+
+1. **Build Studio** if UI or static assets changed: `bun run test:studio` (or `cd packages/wave-studio && bunx vite build`).
+2. **Run a database with sample tables** (pick one):
+   - **CLI:** temp dir + `bun packages/wave-cli/src/main.ts studio <path>.wave --port 4400 --no-open --no-auth` (token gate only), or with auth to capture setup/login flows.
+   - **Embed:** `examples/hono-marketplace` — `bun run seed:small:force` then `bun run dev`, open `http://localhost:3000/wavedb-studio`.
+3. **Use browser automation:** prefer **`cursor-ide-browser`** (navigate, snapshot, screenshot, click) or **`plugin-devtools-for-agents-chrome-devtools`** (navigate, snapshot, screenshot, a11y/console checks). Do not rely on unit tests alone for layout, navigation, or auth gates.
+4. **Cover hash routes and gates** from `packages/wave-studio/src/App.tsx`: `#/schema`, `#/sql`, `#/stats`, `#/logs`, `#/table/<name>`; auth gates `loading`, `setup`, `login`, `token`; table filter, row editor, schema manage panel, and empty/error states when your change touches those flows.
+5. **Fix** broken navigation, console errors, failed API calls, layout/a11y regressions, and embed path issues before finishing the task.
+6. **Re-run** `bun run test:studio` after fixes; include Studio verification in PR **Test plan** when opening/updating the `dev` → `main` PR.
+
+## Screenshot directory (always keep current)
+
+- **Path:** `docs/wavedb-studio-screenshots/`
+- **Canonical list:** only filenames declared in **`manifest.json`** in that folder. **Do not** add timestamped, `-copy`, or duplicate variants; **overwrite** the canonical PNG when the scene changes.
+- **Naming:** `{area}-{detail}.png` (see README + manifest). Use the seeded **`products`** table (hono small seed) for table scenarios unless manifest specifies otherwise.
+- **Viewport:** 1280×800 unless manifest notes a variant.
+- After a Studio-affecting change, update every manifest scenario whose UI changed; remove entries from manifest only when the scenario is permanently dropped.
+- Commit updated PNGs with the code change (same PR on `dev`). Do **not** list screenshot-only updates in **CHANGELOG.md** unless shipped Studio behavior changed for users.
