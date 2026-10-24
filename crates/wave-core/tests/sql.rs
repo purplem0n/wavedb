@@ -861,6 +861,15 @@ fn commutative_returning_replays_deltas_in_order() {
 }
 
 #[test]
+fn foreign_key_allows_self_reference_on_create_table() {
+    let (_d, db) = open_tmp();
+    q(
+        &db,
+        "CREATE TABLE tree (id INT PRIMARY KEY, parent_id INT, FOREIGN KEY (parent_id) REFERENCES tree(id))",
+    );
+}
+
+#[test]
 fn foreign_key_create_rejects_missing_parent() {
     let (_d, db) = open_tmp();
     let e = db

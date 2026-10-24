@@ -287,14 +287,14 @@ export function diffSchema(
           table: m.name,
           description: `add foreign key on ${m.name}(${w.columns.join(", ")}) references ${w.refTable}(${w.refColumns.join(", ")})`,
           destructive: false,
-          applicable: byName.has(w.refTable),
+          applicable: byName.has(w.refTable) || wantedNames.has(w.refTable),
           statement: {
             kind: "alterTable",
             table: m.name,
             action: { op: "addForeignKey", fk: w },
           },
         });
-        if (!byName.has(w.refTable)) {
+        if (!byName.has(w.refTable) && !wantedNames.has(w.refTable)) {
           adds.push({
             op: "conflict",
             table: m.name,
@@ -334,19 +334,22 @@ export function diffSchema(
   }
   if (opts.dropMissingTables) {
     const toDrop = existing.filter((t) => !wantedNames.has(t.name) && !t.name.startsWith("_wave_")).map((t) => t.name);
-    for (const name of dropTableOrder(existing, toDrop)) {
+    const dropOrder = dropTableOrder(existing, toDrop);
+    const orderIndex = new Map(dropOrder.map((n, i) => [n, i]));
+    for (const name of dropOrder) {
       const deps = inboundFkDependents(existing, name).filter((d) => toDrop.includes(d));
+      const blocked = deps.some((d) => (orderIndex.get(d) ?? 0) >= (orderIndex.get(name) ?? 0));
       dropTables.push({
         op: "dropTable",
         table: name,
         description: deps.length
-          ? `drop table ${name} (blocked: ${deps.join(", ")} still reference it — drop dependents first)`
+          ? `drop table ${name} (with ${deps.length} dependent table(s) in this batch)`
           : `drop table ${name}`,
         destructive: true,
-        applicable: deps.length === 0,
-        statement: { kind: "dropTable", name, ifExists: true, cascade: false },
+        applicable: !blocked,
+        statement: { kind: "dropTable", name, ifExists: true, cascade: deps.length > 0 },
       });
     }
   }
-  return [...creates, ...adds, ...dropFks, ...addFks, ...dropIdx, ...idx, ...dropCols, ...dropTables];
+  return [...creates, ...addFks, ...adds, ...dropFks, ...dropIdx, ...idx, ...dropCols, ...dropTables];
 }

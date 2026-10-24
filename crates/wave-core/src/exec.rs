@@ -962,51 +962,8 @@ fn fk_values(t: &TableDef, row: &[Value], fk: &ForeignKeyDef) -> Result<Vec<Valu
     Ok(out)
 }
 
-fn fk_parent_exists(txn: &mut Txn, parent: &TableDef, fk: &ForeignKeyDef, child_vals: &[Value]) -> Result<bool> {
-    if child_vals.iter().any(|v| v.is_null()) {
-        return Ok(true);
-    }
-    if fk.ref_columns.len() != child_vals.len() {
-        return Err(Error::Invalid("foreign key column count mismatch".into()));
-    }
-    let mut row = vec![Value::Null; parent.columns.len()];
-    for (rc, val) in fk.ref_columns.iter().zip(child_vals) {
-        let p = parent
-            .col_pos(rc)
-            .ok_or_else(|| Error::NotFound(format!("column \"{rc}\" not found in \"{}\"", parent.name)))?;
-        row[p] = val.clone();
-    }
-    for pk_col in &parent.primary_key {
-        if row[parent.col_pos(pk_col).unwrap()].is_null() {
-            return Ok(false);
-        }
-    }
-    let pk = parent.pk_enc(&row);
-    Ok(txn.get(&parent.row_key(&pk))?.is_some())
-}
-
-fn fk_violation(child: &TableDef, fk: &ForeignKeyDef) -> Error {
-    Error::Constraint(format!(
-        "FOREIGN KEY constraint failed: {} ({}) REFERENCES {} ({})",
-        child.name,
-        fk.columns.join(", "),
-        fk.ref_table,
-        fk.ref_columns.join(", ")
-    ))
-}
-
 fn check_row_foreign_keys(txn: &mut Txn, t: &TableDef, row: &[Value]) -> Result<()> {
-    for fk in &t.foreign_keys {
-        let vals = fk_values(t, row, fk)?;
-        if vals.iter().all(|v| v.is_null()) {
-            continue;
-        }
-        let parent = catalog::require_table(txn, &fk.ref_table)?;
-        if !fk_parent_exists(txn, &parent, fk, &vals)? {
-            return Err(fk_violation(t, fk));
-        }
-    }
-    Ok(())
+    catalog::check_row_foreign_keys(txn, t, row)
 }
 
 fn child_fk_matches(

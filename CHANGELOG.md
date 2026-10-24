@@ -20,4 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **Engine:** `DROP TABLE` no longer leaves child tables with foreign keys pointing at removed parents (default RESTRICT; optional `CASCADE`).
+- **Engine:** Self-referencing foreign keys at `CREATE TABLE`; safer `DROP TABLE CASCADE`; row validation on `ADD CONSTRAINT`; rename keeps self-FK metadata consistent.
+- **@purplemon/wavedb:** Schema push orders `addForeignKey` after creates and plans batch table drops with cascade when dependents are in the same diff.
+- **Wave Studio:** SQL autocomplete preserves table qualifiers; schema modals trap focus.
 

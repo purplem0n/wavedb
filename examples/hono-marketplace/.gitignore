@@ -1,3 +1,4 @@
+.env
 data/
 data.wave/
 stress-report.json

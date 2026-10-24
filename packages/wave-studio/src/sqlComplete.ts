@@ -134,17 +134,23 @@ export function sqlCompletions(text: string, cursor: number, tables: TableDef[],
     if (scopedFrom && scopedTables.some((t) => t.name === scopedFrom)) {
       scopedTables = tables.filter((t) => t.name === scopedFrom);
     }
+    const qualPrefix = prefix.includes(".") ? prefix.slice(0, prefix.lastIndexOf(".") + 1) : "";
     for (const t of scopedTables) {
       for (const c of t.columns) {
         if (needle && !c.name.toLowerCase().startsWith(needle) && !`${t.name}.${c.name}`.toLowerCase().startsWith(needle)) {
           continue;
         }
+        let insert: string;
+        if (qualPrefix) {
+          insert = `${qualPrefix}${c.name}`;
+        } else if (scopedTables.length === 1) {
+          insert = c.name;
+        } else {
+          insert = `"${t.name.replace(/"/g, '""')}"."${c.name.replace(/"/g, '""')}"`;
+        }
         push({
-          label: scopedTables.length === 1 ? c.name : `${t.name}.${c.name}`,
-          insert:
-            scopedTables.length === 1
-              ? c.name
-              : `"${t.name.replace(/"/g, '""')}"."${c.name.replace(/"/g, '""')}"`,
+          label: scopedTables.length === 1 && !qualPrefix ? c.name : `${t.name}.${c.name}`,
+          insert,
           detail: c.type,
           kind: "column",
         });

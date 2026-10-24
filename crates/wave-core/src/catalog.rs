@@ -17,6 +17,7 @@ use crate::kv::{prefix_range, Txn};
 use crate::stmt::SelectStmt;
 use crate::value::{decode_row, encode_key_value, encode_row, ColumnType, Value};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 pub const CAT_PREFIX: u8 = 0x01;
 pub const VIEW_PREFIX: u8 = 0x03;
@@ -374,6 +375,79 @@ fn ref_columns_unique_on_parent(parent: &TableDef, ref_columns: &[String]) -> bo
         .any(|idx| idx.unique && idx.columns == ref_columns)
 }
 
+fn fk_values(t: &TableDef, row: &[Value], fk: &ForeignKeyDef) -> Result<Vec<Value>> {
+    let mut out = Vec::with_capacity(fk.columns.len());
+    for c in &fk.columns {
+        let p = t
+            .col_pos(c)
+            .ok_or_else(|| Error::NotFound(format!("column \"{c}\" not found")))?;
+        out.push(row[p].clone());
+    }
+    Ok(out)
+}
+
+fn fk_parent_exists(txn: &mut Txn, parent: &TableDef, fk: &ForeignKeyDef, child_vals: &[Value]) -> Result<bool> {
+    if child_vals.iter().any(|v| v.is_null()) {
+        return Ok(true);
+    }
+    if fk.ref_columns.len() != child_vals.len() {
+        return Err(Error::Invalid("foreign key column count mismatch".into()));
+    }
+    let mut row = vec![Value::Null; parent.columns.len()];
+    for (rc, val) in fk.ref_columns.iter().zip(child_vals) {
+        let p = parent
+            .col_pos(rc)
+            .ok_or_else(|| Error::NotFound(format!("column \"{rc}\" not found in \"{}\"", parent.name)))?;
+        row[p] = val.clone();
+    }
+    for pk_col in &parent.primary_key {
+        if row[parent.col_pos(pk_col).unwrap()].is_null() {
+            return Ok(false);
+        }
+    }
+    let pk = parent.pk_enc(&row);
+    Ok(txn.get(&parent.row_key(&pk))?.is_some())
+}
+
+fn fk_violation(child: &TableDef, fk: &ForeignKeyDef) -> Error {
+    Error::Constraint(format!(
+        "FOREIGN KEY constraint failed: {} ({}) REFERENCES {} ({})",
+        child.name,
+        fk.columns.join(", "),
+        fk.ref_table,
+        fk.ref_columns.join(", ")
+    ))
+}
+
+/// Row-level FK enforcement (shared by DML and `ADD CONSTRAINT`).
+pub(crate) fn check_row_foreign_keys(txn: &mut Txn, t: &TableDef, row: &[Value]) -> Result<()> {
+    for fk in &t.foreign_keys {
+        let vals = fk_values(t, row, fk)?;
+        if vals.iter().all(|v| v.is_null()) {
+            continue;
+        }
+        let parent = if fk.ref_table == t.name {
+            t.clone()
+        } else {
+            require_table(txn, &fk.ref_table)?
+        };
+        if !fk_parent_exists(txn, &parent, fk, &vals)? {
+            return Err(fk_violation(t, fk));
+        }
+    }
+    Ok(())
+}
+
+fn validate_existing_rows_foreign_keys(txn: &mut Txn, table: &TableDef) -> Result<()> {
+    let (lo, hi) = prefix_range(&table.row_prefix());
+    for item in txn.scan(lo, hi, false)? {
+        let (_, v) = item?;
+        let row = table.decode_value(&v)?;
+        check_row_foreign_keys(txn, table, &row)?;
+    }
+    Ok(())
+}
+
 fn fk_column_types_match(child: &TableDef, parent: &TableDef, fk: &ForeignKeyDef) -> Result<()> {
     for (c, rc) in fk.columns.iter().zip(&fk.ref_columns) {
         let ct = child.columns[child.col_pos(c).unwrap()].ty;
@@ -404,12 +478,16 @@ pub fn validate_foreign_key_def(txn: &mut Txn, child: &TableDef, fk: &ForeignKey
             )));
         }
     }
-    let parent = require_table(txn, &fk.ref_table).map_err(|_| {
-        Error::Constraint(format!(
-            "foreign key references missing table \"{}\"",
-            fk.ref_table
-        ))
-    })?;
+    let parent = if fk.ref_table == child.name {
+        child.clone()
+    } else {
+        require_table(txn, &fk.ref_table).map_err(|_| {
+            Error::Constraint(format!(
+                "foreign key references missing table \"{}\"",
+                fk.ref_table
+            ))
+        })?
+    };
     for rc in &fk.ref_columns {
         if parent.col_pos(rc).is_none() {
             return Err(Error::Constraint(format!(
@@ -802,6 +880,21 @@ pub fn drop_index(txn: &mut Txn, name: &str, table: Option<&str>, if_exists: boo
 }
 
 pub fn drop_table(txn: &mut Txn, name: &str, if_exists: bool, cascade: bool) -> Result<Option<TableDef>> {
+    let mut visiting = HashSet::new();
+    drop_table_inner(txn, name, if_exists, cascade, &mut visiting)
+}
+
+fn drop_table_inner(
+    txn: &mut Txn,
+    name: &str,
+    if_exists: bool,
+    cascade: bool,
+    visiting: &mut HashSet<String>,
+) -> Result<Option<TableDef>> {
+    if visiting.contains(name) {
+        return Ok(None);
+    }
+    visiting.insert(name.to_string());
     let t = match load_table(txn, name)? {
         Some(t) => t,
         None if if_exists => return Ok(None),
@@ -811,7 +904,7 @@ pub fn drop_table(txn: &mut Txn, name: &str, if_exists: bool, cascade: bool) -> 
     if !fk_deps.is_empty() {
         if cascade {
             for dep in fk_deps {
-                drop_table(txn, &dep, false, true)?;
+                drop_table_inner(txn, &dep, true, true, visiting)?;
             }
         } else {
             return Err(Error::Constraint(format!(
@@ -824,7 +917,7 @@ pub fn drop_table(txn: &mut Txn, name: &str, if_exists: bool, cascade: bool) -> 
     if !view_deps.is_empty() {
         if cascade {
             for v in view_deps {
-                drop_view(txn, &v, false)?;
+                drop_view(txn, &v, true)?;
             }
         } else {
             return Err(Error::Constraint(format!(
@@ -838,6 +931,7 @@ pub fn drop_table(txn: &mut Txn, name: &str, if_exists: bool, cascade: bool) -> 
         drop_index_data(txn, idx)?;
     }
     txn.delete(&catalog_key(name))?;
+    visiting.remove(name);
     Ok(Some(t))
 }
 
@@ -923,6 +1017,13 @@ pub fn alter_table(txn: &mut Txn, name: &str, action: &AlterAction) -> Result<Ta
                         *c = to.to_string();
                     }
                 }
+                if fk.ref_table == name {
+                    for rc in fk.ref_columns.iter_mut() {
+                        if rc == from {
+                            *rc = to.to_string();
+                        }
+                    }
+                }
             }
             sync_fk_column_rename(txn, name, from, to)?;
         }
@@ -931,6 +1032,11 @@ pub fn alter_table(txn: &mut Txn, name: &str, action: &AlterAction) -> Result<Ta
                 return Err(Error::Constraint(format!("table \"{to}\" already exists")));
             }
             sync_fk_ref_table(txn, name, to)?;
+            for fk in t.foreign_keys.iter_mut() {
+                if fk.ref_table == name {
+                    fk.ref_table = to.clone();
+                }
+            }
             txn.delete(&catalog_key(name))?;
             t.name = to.clone();
         }
@@ -962,6 +1068,7 @@ pub fn alter_table(txn: &mut Txn, name: &str, action: &AlterAction) -> Result<Ta
             t.foreign_keys.push(fk);
             ensure_fk_names(&mut t);
             validate_table_foreign_keys(txn, &t)?;
+            validate_existing_rows_foreign_keys(txn, &t)?;
         }
         AlterAction::DropConstraint { name, if_exists } => {
             let pos = t
