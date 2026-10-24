@@ -672,3 +672,22 @@ fn scans_over_hot_keys_with_many_versions_are_correct_in_both_directions() {
         }
     }
 }
+
+#[test]
+fn cumulative_stats_survive_reopen() {
+    let d = tmp();
+    {
+        let e = open(d.path());
+        put(&e, "k", "v");
+        let mut t = e.begin(Isolation::Snapshot);
+        t.put(b"x", b"y").unwrap();
+        drop(t);
+        let s = e.stats();
+        assert!(s.commits >= 1);
+        assert!(s.rollbacks >= 1);
+    }
+    let e2 = open(d.path());
+    let s2 = e2.stats();
+    assert!(s2.commits >= 1, "commits should persist: {}", s2.commits);
+    assert!(s2.rollbacks >= 1, "rollbacks should persist: {}", s2.rollbacks);
+}

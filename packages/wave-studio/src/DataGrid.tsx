@@ -19,6 +19,9 @@ export function DataGrid({
   embedded,
   schema,
   tableDef,
+  editable,
+  onCellDoubleClick,
+  onEditRow,
 }: {
   caption: string;
   columns: string[];
@@ -31,6 +34,10 @@ export function DataGrid({
   /** Full catalog — enables FK hover previews when `tableDef` is set. */
   schema?: TableDef[];
   tableDef?: TableDef;
+  /** When set with a primary key on `tableDef`, enables row/cell editing affordances. */
+  editable?: boolean;
+  onCellDoubleClick?: (rowIndex: number, column: string) => void;
+  onEditRow?: (rowIndex: number) => void;
 }) {
   const fkEnabled = !!(schema?.length && tableDef);
   const [fkPreview, setFkPreview] = useState<{ rect: DOMRect; relations: ReturnType<typeof relationsForCell> } | null>(null);
@@ -87,6 +94,11 @@ export function DataGrid({
         <caption className="sr-only">{caption}</caption>
         <thead>
           <tr>
+            {editable && onEditRow && (
+              <th scope="col" className="cell-actions">
+                <span className="sr-only">Actions</span>
+              </th>
+            )}
             {columns.map((c) => {
               const active = sort?.column === c;
               const typeHint = types?.[c];
@@ -113,13 +125,20 @@ export function DataGrid({
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={columns.length} className="empty">
+              <td colSpan={columns.length + (editable && onEditRow ? 1 : 0)} className="empty">
                 No rows
               </td>
             </tr>
           ) : (
             rows.map((r, i) => (
               <tr key={i}>
+                {editable && onEditRow && (
+                  <td className="cell-actions">
+                    <button type="button" className="btn-icon" title="Edit row" onClick={() => onEditRow(i)}>
+                      <Icon name="edit" className="icon-sm" />
+                    </button>
+                  </td>
+                )}
                 {r.map((v, j) => {
                   const col = columns[j]!;
                   const typeHint = types?.[col];
@@ -139,7 +158,12 @@ export function DataGrid({
                       ]
                         .filter(Boolean)
                         .join(" ")}
-                      title={fkCell ? undefined : display(v, typeHint)}
+                      title={fkCell ? undefined : editable ? "Double-click to edit" : display(v, typeHint)}
+                      onDoubleClick={
+                        editable && onCellDoubleClick && !fkCell
+                          ? () => onCellDoubleClick(i, col)
+                          : undefined
+                      }
                       onMouseEnter={
                         fkCell
                           ? (e) => {

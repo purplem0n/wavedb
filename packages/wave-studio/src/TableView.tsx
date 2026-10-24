@@ -1,15 +1,31 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, engineQueryDurationMs, quote, uiToEngineLatencyMs, type QueryResult, type TableDef } from "./api";
+import { api, display, engineQueryDurationMs, quote, uiToEngineLatencyMs, type QueryResult, type TableDef } from "./api";
 import { tableWhereClause, validateTableFilter } from "./tableFilter";
+import { emptyRule, TableFilterUi } from "./TableFilterUi";
+import { uiFiltersToWhere } from "./uiFilter";
 import { DataGrid } from "./DataGrid";
 import { RefreshIcon } from "./icons";
+import { RowEditor } from "./RowEditor";
+import { buildUpdateSql, parseCellInput } from "./rowEdit";
 import { waveEngineVersionTag } from "./version";
 
 const PAGE = 50;
 
-export function TableView({ table, tables, version }: { table: TableDef; tables: TableDef[]; version: number }) {
+export function TableView({
+  table,
+  tables,
+  version,
+  onMutate,
+}: {
+  table: TableDef;
+  tables: TableDef[];
+  version: number;
+  onMutate?: () => void;
+}) {
   const [filter, setFilter] = useState("");
   const [applied, setApplied] = useState("");
+  const [uiRulesList, setUiRulesList] = useState(() => [emptyRule(table.columns)]);
+  const [advancedSql, setAdvancedSql] = useState(false);
   const [sort, setSort] = useState<{ column: string; desc: boolean } | null>(null);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState<number | null>(null);
@@ -18,10 +34,42 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
   const [loading, setLoading] = useState(false);
   const [queryMs, setQueryMs] = useState<number | null>(null);
   const [uiLatencyMs, setUiLatencyMs] = useState<number | null>(null);
+  const [cellEdit, setCellEdit] = useState<{ row: number; col: string; value: string } | null>(null);
+  const [rowEdit, setRowEdit] = useState<{ row: number; draft: Record<string, string> } | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const canEdit = table.primaryKey.length > 0;
+
+  async function persistChanges(rowIndex: number, buildChanges: () => Record<string, unknown>) {
+    if (!result) return;
+    setEditBusy(true);
+    setEditError(null);
+    try {
+      const changes = buildChanges();
+      if (Object.keys(changes).length === 0) {
+        setCellEdit(null);
+        setRowEdit(null);
+        return;
+      }
+      const sql = buildUpdateSql(table, result.columns, result.rows[rowIndex]!, changes);
+      await api.sql(sql);
+      setCellEdit(null);
+      setRowEdit(null);
+      onMutate?.();
+      await load();
+    } catch (e) {
+      setEditError((e as Error).message);
+    } finally {
+      setEditBusy(false);
+    }
+  }
 
   useEffect(() => {
     setFilter("");
     setApplied("");
+    setUiRulesList([emptyRule(table.columns)]);
+    setAdvancedSql(false);
     setSort(null);
     setPage(0);
   }, [table.name]);
@@ -83,43 +131,60 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
       </div>
 
       <form
-        className="filter-bar"
+        className="filter-bar filter-bar--stacked"
         onSubmit={(e) => {
           e.preventDefault();
           try {
-            validateTableFilter(filter);
+            const predicate = advancedSql ? validateTableFilter(filter) : uiFiltersToWhere(uiRulesList, table.columns);
             setPage(0);
-            setApplied(filter);
+            setApplied(predicate);
             setError(null);
           } catch (err) {
             setError((err as Error).message);
           }
         }}
       >
-        <label htmlFor="where-input">Filter (SQL WHERE):</label>
-        <div className="filter-input-wrap">
-          <input
-            id="where-input"
-            className="filter-input"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder={table.columns[0] ? `id > 10 AND ${table.columns[1]?.name ?? "status"} = 'shipped'...` : ""}
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <span className="filter-sql-tag">SQL</span>
-        </div>
+        {!advancedSql ? (
+          <TableFilterUi columns={table.columns} rules={uiRulesList} onChange={setUiRulesList} />
+        ) : (
+          <>
+            <label htmlFor="where-input">Advanced SQL (WHERE predicate only)</label>
+            <div className="filter-input-wrap">
+              <input
+                id="where-input"
+                className="filter-input"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder={table.columns[0] ? `id > 10 AND ${table.columns[1]?.name ?? "status"} = 'shipped'...` : ""}
+                spellCheck={false}
+                autoComplete="off"
+              />
+              <span className="filter-sql-tag">SQL</span>
+            </div>
+          </>
+        )}
         <div className="filter-actions">
           <button type="submit" className="btn-primary">
-            Apply
+            Apply filters
           </button>
-          {applied && (
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => {
+              setAdvancedSql((a) => !a);
+              setError(null);
+            }}
+          >
+            {advancedSql ? "Simple filters" : "Advanced SQL"}
+          </button>
+          {(applied || uiRulesList.some((r) => r.value)) && (
             <button
               type="button"
               className="btn-ghost"
               onClick={() => {
                 setFilter("");
                 setApplied("");
+                setUiRulesList([emptyRule(table.columns)]);
                 setPage(0);
               }}
             >
@@ -145,10 +210,115 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
             sort={sort}
             schema={tables}
             tableDef={table}
+            editable={canEdit}
             types={Object.fromEntries(table.columns.map((c) => [c.name, c.type]))}
             onSort={(c) => {
               setPage(0);
               setSort((s) => (s?.column === c ? (s.desc ? null : { column: c, desc: true }) : { column: c, desc: false }));
+            }}
+            onCellDoubleClick={(rowIndex, col) => {
+              if (table.primaryKey.includes(col)) return;
+              const j = result.columns.indexOf(col);
+              const v = result.rows[rowIndex]?.[j];
+              const def = table.columns.find((c) => c.name === col);
+              setEditError(null);
+              setCellEdit({
+                row: rowIndex,
+                col,
+                value: v === null || v === undefined ? "" : display(v, def?.type),
+              });
+            }}
+            onEditRow={(rowIndex) => {
+              const draft: Record<string, string> = {};
+              for (let j = 0; j < result.columns.length; j++) {
+                const col = result.columns[j]!;
+                const def = table.columns.find((c) => c.name === col);
+                const v = result.rows[rowIndex]?.[j];
+                draft[col] = v === null || v === undefined ? "" : display(v, def?.type);
+              }
+              setEditError(null);
+              setRowEdit({ row: rowIndex, draft });
+            }}
+          />
+        )}
+        {cellEdit && result && (
+          <div className="cell-edit-popover" role="dialog" aria-label={`Edit ${cellEdit.col}`}>
+            <label className="cell-edit-label">{cellEdit.col}</label>
+            <input
+              value={cellEdit.value}
+              autoFocus
+              disabled={editBusy}
+              onChange={(e) => setCellEdit({ ...cellEdit, value: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setCellEdit(null);
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void persistChanges(cellEdit.row, () => {
+                    const def = table.columns.find((c) => c.name === cellEdit.col);
+                    if (!def) throw new Error("Unknown column");
+                    const old = result.rows[cellEdit.row]?.[result.columns.indexOf(cellEdit.col)];
+                    const oldDisp = old === null || old === undefined ? "" : display(old, def.type);
+                    if (cellEdit.value === oldDisp) return {};
+                    return { [cellEdit.col]: parseCellInput(cellEdit.value, def.type, def.nullable) };
+                  });
+                }
+              }}
+            />
+            {editError && (
+              <p role="alert" className="alert alert--error">
+                {editError}
+              </p>
+            )}
+            <div className="cell-edit-actions">
+              <button type="button" className="btn-secondary" onClick={() => setCellEdit(null)} disabled={editBusy}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-run"
+                disabled={editBusy}
+                onClick={() => {
+                  void persistChanges(cellEdit.row, () => {
+                    const def = table.columns.find((c) => c.name === cellEdit.col);
+                    if (!def) throw new Error("Unknown column");
+                    const old = result.rows[cellEdit.row]?.[result.columns.indexOf(cellEdit.col)];
+                    const oldDisp = old === null || old === undefined ? "" : display(old, def.type);
+                    if (cellEdit.value === oldDisp) return {};
+                    return { [cellEdit.col]: parseCellInput(cellEdit.value, def.type, def.nullable) };
+                  });
+                }}
+              >
+                {editBusy ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        )}
+        {rowEdit && result && (
+          <RowEditor
+            table={table}
+            columns={result.columns}
+            row={result.rows[rowEdit.row]!}
+            draft={rowEdit.draft}
+            busy={editBusy}
+            error={editError}
+            onChange={(col, value) => setRowEdit({ ...rowEdit, draft: { ...rowEdit.draft, [col]: value } })}
+            onClose={() => setRowEdit(null)}
+            onSave={() => {
+              void persistChanges(rowEdit.row, () => {
+                const changes: Record<string, unknown> = {};
+                const pk = new Set(table.primaryKey);
+                for (const col of result.columns) {
+                  if (pk.has(col)) continue;
+                  const def = table.columns.find((c) => c.name === col);
+                  if (!def) continue;
+                  const j = result.columns.indexOf(col);
+                  const old = result.rows[rowEdit.row]?.[j];
+                  const oldDisp = old === null || old === undefined ? "" : display(old, def.type);
+                  if (rowEdit.draft[col] === oldDisp) continue;
+                  changes[col] = parseCellInput(rowEdit.draft[col] ?? "", def.type, def.nullable);
+                }
+                return changes;
+              });
             }}
           />
         )}
@@ -162,13 +332,13 @@ export function TableView({ table, tables, version }: { table: TableDef; tables:
               {queryMs !== null && (
                 <>
                   {" "}
-                  • Engine query: <span className="accent">{queryMs.toFixed(2)}ms</span>
+                  • Query speed: <span className="accent">{queryMs.toFixed(2)}ms</span>
                 </>
               )}
               {uiLatencyMs !== null && (
                 <>
                   {" "}
-                  • UI → engine: <span className="accent">{uiLatencyMs.toFixed(2)}ms</span>
+                  • UI latency: <span className="accent">{uiLatencyMs.toFixed(2)}ms</span>
                 </>
               )}
             </>

@@ -39,7 +39,35 @@ use std::sync::{Arc, Weak};
 
 const TS_LEN: usize = 8;
 const META_TS_KEY: &[u8] = b"last_ts";
+const META_STATS_KEY: &[u8] = b"cumulative_stats_v1";
 const META_AI_PREFIX: &[u8] = b"ai:";
+
+fn counters_from_meta(meta: &Keyspace) -> Result<Counters> {
+    let counters = Counters::default();
+    let Some(bytes) = meta.get(META_STATS_KEY)? else {
+        return Ok(counters);
+    };
+    if bytes.len() != 32 {
+        return Ok(counters);
+    }
+    counters.commits.store(
+        u64::from_be_bytes(bytes[0..8].try_into().unwrap()),
+        Ordering::Relaxed,
+    );
+    counters.conflicts.store(
+        u64::from_be_bytes(bytes[8..16].try_into().unwrap()),
+        Ordering::Relaxed,
+    );
+    counters.rollbacks.store(
+        u64::from_be_bytes(bytes[16..24].try_into().unwrap()),
+        Ordering::Relaxed,
+    );
+    counters.syncs.store(
+        u64::from_be_bytes(bytes[24..32].try_into().unwrap()),
+        Ordering::Relaxed,
+    );
+    Ok(counters)
+}
 
 fn ai_meta_key(table_id: u32) -> Vec<u8> {
     let mut k = META_AI_PREFIX.to_vec();
@@ -166,6 +194,7 @@ impl Engine {
             Some(v) if v.len() == 8 => u64::from_be_bytes(v[..8].try_into().unwrap()),
             _ => 0,
         };
+        let counters = counters_from_meta(&meta)?;
         Ok(Arc::new(Engine {
             db,
             data,
@@ -183,7 +212,7 @@ impl Engine {
             sync: Mutex::new(SyncState::default()),
             sync_cv: Condvar::new(),
             entering: AtomicUsize::new(0),
-            counters: Counters::default(),
+            counters,
             aux: Mutex::new(HashMap::new()),
         }))
     }
@@ -240,6 +269,49 @@ impl Engine {
 
     pub fn visible_ts(&self) -> u64 {
         self.visible_ts.load(Ordering::Acquire)
+    }
+
+    fn cumulative_stats_bytes(&self) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[0..8].copy_from_slice(&self.counters.commits.load(Ordering::Relaxed).to_be_bytes());
+        out[8..16].copy_from_slice(&self.counters.conflicts.load(Ordering::Relaxed).to_be_bytes());
+        out[16..24].copy_from_slice(&self.counters.rollbacks.load(Ordering::Relaxed).to_be_bytes());
+        out[24..32].copy_from_slice(&self.counters.syncs.load(Ordering::Relaxed).to_be_bytes());
+        out
+    }
+
+    fn persist_cumulative_stats(&self) -> Result<()> {
+        if self.opts.temporary {
+            return Ok(());
+        }
+        let mut batch = self.db.batch();
+        batch.insert(
+            &self.meta,
+            META_STATS_KEY.to_vec(),
+            self.cumulative_stats_bytes().to_vec(),
+        );
+        batch.commit()?;
+        Ok(())
+    }
+
+    fn bump_commit_count(&self) -> Result<()> {
+        self.counters.commits.fetch_add(1, Ordering::Relaxed);
+        self.persist_cumulative_stats()
+    }
+
+    fn bump_conflict_count(&self) -> Result<()> {
+        self.counters.conflicts.fetch_add(1, Ordering::Relaxed);
+        self.persist_cumulative_stats()
+    }
+
+    fn bump_rollback_count(&self) -> Result<()> {
+        self.counters.rollbacks.fetch_add(1, Ordering::Relaxed);
+        self.persist_cumulative_stats()
+    }
+
+    fn bump_sync_count(&self) -> Result<()> {
+        self.counters.syncs.fetch_add(1, Ordering::Relaxed);
+        self.persist_cumulative_stats()
     }
 
     pub fn begin(self: &Arc<Self>, iso: Isolation) -> Txn {
@@ -357,7 +429,8 @@ impl Engine {
             st.syncing = false;
             if res.is_ok() {
                 st.synced_seq = st.synced_seq.max(target);
-                self.counters.syncs.fetch_add(1, Ordering::Relaxed);
+                let _cs = self.commit.lock();
+                let _ = self.bump_sync_count();
             }
             self.sync_cv.notify_all();
             res?;
@@ -857,7 +930,8 @@ impl Txn {
             self.done = true;
             self.engine.unregister(self.start_ts);
             if !committed {
-                self.engine.counters.rollbacks.fetch_add(1, Ordering::Relaxed);
+                let _cs = self.engine.commit.lock();
+                let _ = self.engine.bump_rollback_count();
             }
         }
     }
@@ -881,6 +955,7 @@ impl Txn {
             }
             if self.writes.is_empty() {
                 eng.counters.commits.fetch_add(1, Ordering::Relaxed);
+                let _ = eng.persist_cumulative_stats();
                 return Ok(CommitInfo {
                     commit_ts: self.start_ts,
                     keys_written: 0,
@@ -893,7 +968,7 @@ impl Txn {
                 }
                 if let Some(&ts) = cs.last_write.get(k) {
                     if ts > self.start_ts {
-                        eng.counters.conflicts.fetch_add(1, Ordering::Relaxed);
+                        eng.bump_conflict_count()?;
                         return Err(Error::Conflict(format!(
                             "write-write conflict on key {}",
                             show_key(k)
@@ -905,7 +980,7 @@ impl Txn {
                 for k in &self.read_keys {
                     if let Some(&ts) = cs.last_write.get(k) {
                         if ts > self.start_ts {
-                            eng.counters.conflicts.fetch_add(1, Ordering::Relaxed);
+                            eng.bump_conflict_count()?;
                             return Err(Error::Conflict(format!(
                                 "read-write conflict on key {}",
                                 show_key(k)
@@ -922,7 +997,7 @@ impl Txn {
                         .range::<Vec<u8>, _>((lo.clone(), hi.clone()))
                         .find(|(_, &ts)| ts > self.start_ts)
                     {
-                        eng.counters.conflicts.fetch_add(1, Ordering::Relaxed);
+                        eng.bump_conflict_count()?;
                         return Err(Error::Conflict(format!(
                             "range read conflict near key {}",
                             show_key(k)
@@ -945,8 +1020,18 @@ impl Txn {
                     None => batch.insert(&eng.data, vk, vec![0u8]),
                 }
             }
+            eng.counters.commits.fetch_add(1, Ordering::Relaxed);
+            batch.insert(
+                &eng.meta,
+                META_STATS_KEY.to_vec(),
+                eng.cumulative_stats_bytes().to_vec(),
+            );
             batch.insert(&eng.meta, META_TS_KEY.to_vec(), ts.to_be_bytes().to_vec());
-            batch.commit()?;
+            let result = batch.commit();
+            if result.is_err() {
+                eng.counters.commits.fetch_sub(1, Ordering::Relaxed);
+            }
+            result?;
             cs.next_ts = ts + 1;
             for k in self.writes.keys() {
                 cs.last_write.insert(k.clone(), ts);
@@ -971,7 +1056,6 @@ impl Txn {
             (ts, seq)
         };
         drop(entering);
-        eng.counters.commits.fetch_add(1, Ordering::Relaxed);
         if sync_mode {
             eng.wait_durable(seq)?;
         }

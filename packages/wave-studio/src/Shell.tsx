@@ -2,11 +2,12 @@ import type { ReactNode } from "react";
 import type { TableDef } from "./api";
 import { Icon, RefreshIcon, TableRowIcon, WaveLogo } from "./icons";
 
-type Route = { page: "table"; name: string } | { page: "sql" } | { page: "schema" } | { page: "stats" };
+type Route = { page: "table"; name: string } | { page: "sql" } | { page: "schema" } | { page: "stats" } | { page: "logs" };
 
 const VIEW_NAV = [
   { page: "schema" as const, label: "Schema", hash: "#/schema", icon: "schema" },
   { page: "sql" as const, label: "SQL Console", hash: "#/sql", icon: "terminal" },
+  { page: "logs" as const, label: "Logs & Metrics", hash: "#/logs", icon: "list_alt" },
   { page: "stats" as const, label: "Stats", hash: "#/stats", icon: "speed" },
 ];
 
@@ -14,6 +15,7 @@ function breadcrumbLabel(route: Route): string {
   if (route.page === "table") return route.name;
   if (route.page === "sql") return "SQL console";
   if (route.page === "stats") return "Stats";
+  if (route.page === "logs") return "Logs & Metrics";
   return "Schema";
 }
 
@@ -21,12 +23,16 @@ export function Shell({
   route,
   tables,
   connected,
+  tablesLoading,
+  reloadNotice,
   onRefresh,
   children,
 }: {
   route: Route;
   tables: TableDef[];
   connected: boolean;
+  tablesLoading?: boolean;
+  reloadNotice?: string | null;
   onRefresh: () => void;
   children: ReactNode;
 }) {
@@ -82,10 +88,21 @@ export function Shell({
           </div>
         </div>
         <div className="sidebar-foot">
-          <button type="button" className="btn-reload-tables" onClick={onRefresh}>
+          <button
+            type="button"
+            className={`btn-reload-tables${tablesLoading ? " is-loading" : ""}`}
+            onClick={onRefresh}
+            disabled={tablesLoading}
+            aria-busy={tablesLoading}
+          >
             <RefreshIcon />
-            <span>Reload tables</span>
+            <span>{tablesLoading ? "Reloading…" : "Reload tables"}</span>
           </button>
+          {reloadNotice && (
+            <p role="status" className="reload-notice">
+              {reloadNotice}
+            </p>
+          )}
         </div>
       </aside>
       <div className="studio-frame">

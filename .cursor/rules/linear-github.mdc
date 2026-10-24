@@ -1,0 +1,40 @@
+---
+description: Keep GitHub PRs and Linear (WaveDB project) issues in sync
+alwaysApply: true
+---
+
+# Linear ↔ GitHub sync (WaveDB)
+
+Linear project: **WaveDB** ([Linear](https://linear.app/xamantra/project/wavedb-80ca4d1f17c8)). Team key: **PER** (issues like `PER-123`).
+
+## When starting work
+
+- Pick or create a Linear issue in the **WaveDB** project before medium/large code changes.
+- Move the issue to **In Progress** when implementation begins.
+- Commit on **`dev`** for PR work, as required by `pull-requests.mdc`.
+
+## Pull requests (`dev` → `main`)
+
+Every PR that implements or fixes tracked work must **link Linear in the PR body**:
+
+```markdown
+## Linear
+- PER-XX — short title (https://linear.app/xamantra/issue/PER-XX/...)
+```
+
+- Use one bullet per issue when a PR spans multiple items.
+- In the **Summary**, mention the issue ID(s) in plain text (e.g. “PER-7: persist engine stats across restart”).
+- If the GitHub ↔ Linear integration is enabled, include a closing keyword on its own line for auto-close on merge, e.g. `Fixes PER-7` (one issue per line if multiple).
+
+When creating or refreshing the open `dev` → `main` PR (`gh pr edit`), **preserve or add** the **Linear** section; do not drop issue links when updating title/body for new commits.
+
+## After merge
+
+- Confirm linked issues moved to **Done** (via integration or manually in Linear).
+- If work was partial, leave the issue open and note what shipped in a Linear comment.
+
+## Agents and automation
+
+- Before opening/updating a PR, use Linear MCP to find the matching **WaveDB** issue; if none exists, ask whether to create one.
+- When a PR URL exists, add it to the issue via **links** (attachment) or a comment so the issue shows the GitHub PR.
+- Do not mark Linear issues Done until the change is merged to **`main`** (or explicitly released), unless the user asks otherwise.

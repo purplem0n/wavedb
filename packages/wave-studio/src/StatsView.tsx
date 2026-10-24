@@ -48,14 +48,14 @@ export function StatsView({ onChanged }: { onChanged: () => void }) {
 
   const items: [string, string, string][] = stats
     ? [
-        ["Commits", stats.commits.toLocaleString(), "Total committed transactions"],
-        ["Conflicts", stats.conflicts.toLocaleString(), "Transaction retry / write conflicts"],
-        ["Rollbacks", stats.rollbacks.toLocaleString(), "Aborted transactions"],
-        ["Active transactions", stats.activeTxns.toLocaleString(), "In-flight read/write txns"],
-        ["fsync batches", stats.fsyncs.toLocaleString(), "WAL disk sync operations"],
-        ["Commit clock", stats.visibleTs.toLocaleString(), "Latest visible commit timestamp"],
-        ["Tracked writes", stats.trackedWrites.toLocaleString(), "Keys held for conflict validation"],
-        ["On disk", bytes(stats.diskBytes), `${stats.diskBytes.toLocaleString()} bytes`],
+        ["Commits", stats.commits.toLocaleString(), "Total committed transactions (persists across restart)"],
+        ["Conflicts", stats.conflicts.toLocaleString(), "Transaction retry / write conflicts (persists across restart)"],
+        ["Rollbacks", stats.rollbacks.toLocaleString(), "Aborted transactions (persists across restart)"],
+        ["Active transactions", stats.activeTxns.toLocaleString(), "In-flight txns (resets when process restarts)"],
+        ["fsync batches", stats.fsyncs.toLocaleString(), "WAL disk sync operations (persists across restart)"],
+        ["Commit clock", stats.visibleTs.toLocaleString(), "Latest visible commit timestamp (from storage)"],
+        ["Tracked writes", stats.trackedWrites.toLocaleString(), "Keys held for conflict validation (in-memory)"],
+        ["On disk", bytes(stats.diskBytes), `${stats.diskBytes.toLocaleString()} bytes on disk now`],
       ]
     : [];
 

@@ -12,6 +12,7 @@ import type { TLSSocket } from "node:tls";
 import { acquireLeaderLease, startLeaderRenewal, type LeaderLease } from "./leader.ts";
 import { initWaveAuth, normalizePrefix, type WaveAuth } from "./auth.ts";
 import { wavedbPackageVersion } from "./pkgVersion.ts";
+import { QueryLog, classifyStmt } from "./queryLog.ts";
 
 export interface HandlerOptions {
   /** Path to database directory (leader lease + superuser auth). */
@@ -233,6 +234,7 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       : undefined;
 
   const txs = new Map<string, { tx: TxBackend; timer: ReturnType<typeof setTimeout> }>();
+  const queryLog = resolvedDataPath ? new QueryLog({ dataPath: resolvedDataPath }) : new QueryLog();
   let stopLeader: (() => void) | undefined;
   let leader: LeaderLease | undefined;
   let active = true;
@@ -344,12 +346,46 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
 
     if (method === "GET" && (path === "/api/tables" || path === "/api/schema")) return jsonResponse(200, await db.tables());
     if (method === "GET" && path === "/api/stats") return jsonResponse(200, await db.stats());
+    if (method === "GET" && path === "/api/query-metrics") return jsonResponse(200, queryLog.getMetrics());
+    if (method === "GET" && path === "/api/query-log") {
+      const url = reqLike instanceof Request ? new URL(reqLike.url) : new URL("http://x" + (reqLike.url ?? ""));
+      const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") ?? 100) || 100));
+      const since = url.searchParams.get("since") ?? undefined;
+      return jsonResponse(200, { entries: queryLog.recent(limit, since) });
+    }
     if (method !== "POST") return jsonResponse(404, { error: { code: "WAVE_NOT_FOUND", message: "no such endpoint" } });
 
     if (path === "/api/run") {
       const target = body.tx ? touch(String(body.tx)).tx.exec : db.backend.exec;
-      const r = body.sql !== undefined ? await target.runSql(String(body.sql), body.params ?? []) : await target.run(body.stmt);
-      return jsonResponse(200, r);
+      const sql = body.sql !== undefined ? String(body.sql) : undefined;
+      const stmt = body.stmt;
+      const logSql =
+        sql ?? String(JSON.stringify(stmt ?? null)).slice(0, 500);
+      const logKind =
+        sql === undefined && typeof stmt === "object" && stmt !== null
+          ? classifyStmt(stmt as Record<string, unknown>)
+          : undefined;
+      try {
+        const r =
+          sql !== undefined ? await target.runSql(sql, body.params ?? []) : await target.run(body.stmt);
+        queryLog.record({
+          sql: logSql,
+          kind: logKind,
+          durationMs: r.durationMs,
+          rowsAffected: r.rowsAffected,
+          ok: true,
+        });
+        return jsonResponse(200, r);
+      } catch (e) {
+        const err = mapNativeError(e);
+        queryLog.record({
+          sql: logSql,
+          kind: logKind,
+          ok: false,
+          error: err.message,
+        });
+        throw e;
+      }
     }
     if (path === "/api/tx/begin") {
       if (txs.size >= MAX_OPEN_TX) {

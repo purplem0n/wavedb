@@ -3,16 +3,17 @@ import { ApiError, api, authApi, getToken, setToken, type AuthPhase, type TableD
 import { SchemaView } from "./SchemaView";
 import { Shell } from "./Shell";
 import { SqlConsole } from "./SqlConsole";
+import { LogsView } from "./LogsView";
 import { StatsView } from "./StatsView";
 import { TableView } from "./TableView";
 import { Icon, WaveLogo } from "./icons";
 
-type Route = { page: "table"; name: string } | { page: "sql" } | { page: "schema" } | { page: "stats" };
+type Route = { page: "table"; name: string } | { page: "sql" } | { page: "schema" } | { page: "stats" } | { page: "logs" };
 
 function parseHash(): Route {
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, ""));
   if (h.startsWith("table/")) return { page: "table", name: h.slice(6) };
-  if (h === "sql" || h === "schema" || h === "stats") return { page: h };
+  if (h === "sql" || h === "schema" || h === "stats" || h === "logs") return { page: h };
   return { page: "schema" };
 }
 
@@ -28,6 +29,8 @@ export function App() {
   const [confirm, setConfirm] = useState("");
   const [setupToken, setSetupToken] = useState("");
   const [tokenInput, setTokenInput] = useState(getToken());
+  const [tablesLoading, setTablesLoading] = useState(false);
+  const [reloadNotice, setReloadNotice] = useState<string | null>(null);
   useEffect(() => {
     const on = () => setRoute(parseHash());
     window.addEventListener("hashchange", on);
@@ -43,11 +46,14 @@ export function App() {
   }, []);
 
   const refresh = useCallback(async () => {
+    setTablesLoading(true);
+    setReloadNotice(null);
     try {
       setTables(await api.tables());
       setError(null);
       setGate("ok");
       setVersion((v) => v + 1);
+      setReloadNotice("Tables updated");
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         try {
@@ -59,9 +65,20 @@ export function App() {
           setError((err as Error).message);
           setGate("setup");
         }
-      } else setError((e as Error).message);
+      } else {
+        setError((e as Error).message);
+        setReloadNotice("Reload failed");
+      }
+    } finally {
+      setTablesLoading(false);
     }
   }, [resolveGate]);
+
+  useEffect(() => {
+    if (!reloadNotice) return;
+    const id = window.setTimeout(() => setReloadNotice(null), 3000);
+    return () => window.clearTimeout(id);
+  }, [reloadNotice]);
 
   useEffect(() => {
     void (async () => {
@@ -88,7 +105,7 @@ export function App() {
     document.title =
       route.page === "table"
         ? `${route.name} · Wave Studio`
-        : `${{ schema: "Schema", sql: "SQL console", stats: "Stats" }[route.page]} · Wave Studio`;
+        : `${{ schema: "Schema", sql: "SQL console", stats: "Stats", logs: "Logs & Metrics" }[route.page]} · Wave Studio`;
   }, [route]);
 
   const submitAuth = async (phase: AuthPhase) => {
@@ -218,18 +235,28 @@ export function App() {
   }
 
   return (
-    <Shell route={route} tables={tables} connected={!error && gate === "ok"} onRefresh={() => void refresh()}>
+    <Shell
+      route={route}
+      tables={tables}
+      connected={!error && gate === "ok"}
+      tablesLoading={tablesLoading}
+      reloadNotice={reloadNotice}
+      onRefresh={() => void refresh()}
+    >
       {error && (
         <p role="alert" className="alert alert--error">
           {error}
         </p>
       )}
-      {route.page === "schema" && <SchemaView tables={tables} onOpen={(n) => go(`#/table/${encodeURIComponent(n)}`)} />}
-      {route.page === "sql" && <SqlConsole onChanged={() => void refresh()} />}
+      {route.page === "schema" && (
+        <SchemaView tables={tables} onOpen={(n) => go(`#/table/${encodeURIComponent(n)}`)} onSchemaChange={() => void refresh()} />
+      )}
+      {route.page === "sql" && <SqlConsole tables={tables} onChanged={() => void refresh()} />}
       {route.page === "stats" && <StatsView onChanged={() => void refresh()} />}
+      {route.page === "logs" && <LogsView />}
       {route.page === "table" &&
         (current ? (
-          <TableView table={current} tables={tables} version={version} />
+          <TableView table={current} tables={tables} version={version} onMutate={() => void refresh()} />
         ) : (
           <div className="empty-state">
             <Icon name="table_rows" className="icon-lg" />
