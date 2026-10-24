@@ -75,9 +75,9 @@
     },
     {
       "file": "schema-manage-panel.png",
-      "description": "Schema — Manage table panel on products",
+      "description": "Schema — Edit table panel on products",
       "route": "#/schema",
-      "setup": "Click Manage on products card; snapshot shows “Manage table” before screenshot"
+      "setup": "Click Edit on products card; snapshot shows “Edit table” before screenshot"
     },
     {
       "file": "state-table-not-found.png",

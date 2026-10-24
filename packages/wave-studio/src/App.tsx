@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, api, authApi, getToken, setToken, type AuthPhase, type TableDef } from "./api";
+import { SchemaManagePanel } from "./SchemaManagePanel";
 import { SchemaView } from "./SchemaView";
 import { Shell } from "./Shell";
+import { StudioModal } from "./StudioModal";
 import { SqlConsole } from "./SqlConsole";
 import { LogsView } from "./LogsView";
 import { StatsView } from "./StatsView";
@@ -31,6 +33,7 @@ export function App() {
   const [tokenInput, setTokenInput] = useState(getToken());
   const [tablesLoading, setTablesLoading] = useState(false);
   const [reloadNotice, setReloadNotice] = useState<string | null>(null);
+  const [editTable, setEditTable] = useState<string | null>(null);
   useEffect(() => {
     const on = () => setRoute(parseHash());
     window.addEventListener("hashchange", on);
@@ -105,7 +108,7 @@ export function App() {
     document.title =
       route.page === "table"
         ? `${route.name} · Wave Studio`
-        : `${{ schema: "Schema", sql: "SQL console", stats: "Stats", logs: "Logs & Metrics" }[route.page]} · Wave Studio`;
+        : `${{ schema: "Schema", sql: "SQL console", stats: "Stats", logs: "Logs" }[route.page]} · Wave Studio`;
   }, [route]);
 
   const submitAuth = async (phase: AuthPhase) => {
@@ -234,7 +237,10 @@ export function App() {
     );
   }
 
+  const editTableDef = editTable ? tables.find((t) => t.name === editTable) : undefined;
+
   return (
+    <>
     <Shell
       route={route}
       tables={tables}
@@ -242,6 +248,7 @@ export function App() {
       tablesLoading={tablesLoading}
       reloadNotice={reloadNotice}
       onRefresh={() => void refresh()}
+      onEditTable={setEditTable}
     >
       {error && (
         <p role="alert" className="alert alert--error">
@@ -249,7 +256,12 @@ export function App() {
         </p>
       )}
       {route.page === "schema" && (
-        <SchemaView tables={tables} onOpen={(n) => go(`#/table/${encodeURIComponent(n)}`)} onSchemaChange={() => void refresh()} />
+        <SchemaView
+          tables={tables}
+          onOpen={(n) => go(`#/table/${encodeURIComponent(n)}`)}
+          onEditTable={setEditTable}
+          onSchemaChange={() => void refresh()}
+        />
       )}
       {route.page === "sql" && <SqlConsole tables={tables} onChanged={() => void refresh()} />}
       {route.page === "stats" && <StatsView onChanged={() => void refresh()} />}
@@ -269,5 +281,17 @@ export function App() {
           </div>
         ))}
     </Shell>
+    {editTableDef && (
+      <StudioModal title={`Edit ${editTableDef.name}`} onClose={() => setEditTable(null)} wide>
+        <SchemaManagePanel
+          table={editTableDef}
+          onDone={() => {
+            setEditTable(null);
+            void refresh();
+          }}
+        />
+      </StudioModal>
+    )}
+    </>
   );
 }
