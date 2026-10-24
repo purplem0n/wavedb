@@ -109,11 +109,19 @@ check_status() {
     echo "coderabbit_fail"
     return 0
   fi
-  if [[ "$ci_pending" -eq 0 ]] && [[ "$ci_pass" -lt ${#REQUIRED_CI[@]} ]]; then
-    echo "ci_fail"
-    return 0
-  fi
-  if [[ "$ci_pending" -eq 1 ]]; then
+  if [[ "$ci_pending" -eq 1 ]] || [[ "$ci_pass" -lt ${#REQUIRED_CI[@]} ]]; then
+    if [[ "$ci_pending" -eq 0 ]] && [[ "$ci_pass" -lt ${#REQUIRED_CI[@]} ]]; then
+      if printf '%s\n' "$checks_out" | grep -qE '^(rust|native-and-ts)\s+(pending|queued|in_progress)\b'; then
+        echo "waiting_ci"
+        return 0
+      fi
+      if ! printf '%s\n' "$checks_out" | grep -qE '^(rust|native-and-ts)\s'; then
+        echo "waiting_ci"
+        return 0
+      fi
+      echo "ci_fail"
+      return 0
+    fi
     echo "waiting_ci"
     return 0
   fi
