@@ -429,6 +429,7 @@ impl Engine {
             st.syncing = false;
             if res.is_ok() {
                 st.synced_seq = st.synced_seq.max(target);
+                let _cs = self.commit.lock();
                 let _ = self.bump_sync_count();
             }
             self.sync_cv.notify_all();
@@ -1026,7 +1027,11 @@ impl Txn {
                 eng.cumulative_stats_bytes().to_vec(),
             );
             batch.insert(&eng.meta, META_TS_KEY.to_vec(), ts.to_be_bytes().to_vec());
-            batch.commit()?;
+            let result = batch.commit();
+            if result.is_err() {
+                eng.counters.commits.fetch_sub(1, Ordering::Relaxed);
+            }
+            result?;
             cs.next_ts = ts + 1;
             for k in self.writes.keys() {
                 cs.last_write.insert(k.clone(), ts);
