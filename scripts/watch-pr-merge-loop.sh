@@ -61,7 +61,13 @@ check_status() {
   local ci_pending=0 ci_fail=0 ci_pass=0 bot_pending=0 bot_fail=0 bot_done=0
   local line name status _rest checks_out
 
-  if ! checks_out=$(gh pr checks "$PR" 2>&1); then
+  # gh exits 8 while required checks are pending; output is still usable.
+  checks_out=$(gh pr checks "$PR" 2>&1) || true
+  if [[ -z "$checks_out" ]]; then
+    echo "gh_error"
+    return 0
+  fi
+  if printf '%s\n' "$checks_out" | grep -qiE '^(HTTP |GraphQL:|failed to )'; then
     echo "gh_error"
     return 0
   fi
