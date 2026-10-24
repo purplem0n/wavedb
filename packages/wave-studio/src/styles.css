@@ -1313,15 +1313,59 @@ code,
   background: #080a0e;
 }
 
+.sql-editor-stack {
+  position: relative;
+  width: 100%;
+  min-height: 120px;
+}
+
 .sql-editor {
   width: 100%;
   min-height: 120px;
+  margin: 0;
   border: none;
   background: transparent;
-  color: var(--on-surface);
+  font-family: var(--font-mono);
   font-size: 14px;
   line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow: auto;
+}
+
+.sql-editor-highlight {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  color: var(--on-surface);
+  resize: none;
+}
+
+.sql-editor-input {
+  position: relative;
+  z-index: 1;
   resize: vertical;
+  color: transparent;
+  caret-color: var(--primary);
+}
+
+.sql-hl-keyword {
+  color: var(--tertiary);
+  font-weight: 600;
+}
+.sql-hl-string {
+  color: #a5d6ff;
+}
+.sql-hl-number {
+  color: var(--primary);
+}
+.sql-hl-comment {
+  color: var(--on-surface-variant);
+  font-style: italic;
+}
+.sql-hl-plain {
+  color: var(--on-surface);
 }
 
 .sql-editor:focus {

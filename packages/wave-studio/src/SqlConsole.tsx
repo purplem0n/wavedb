@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, uiToEngineLatencyMs, type QueryResult, type TableDef } from "./api";
 import { applyCompletion, sqlCompletions, type CompletionItem } from "./sqlComplete";
+import { highlightSql } from "./sqlHighlight";
 import { DataGrid } from "./DataGrid";
 import { Icon } from "./icons";
 import { waveEngineVersionTag } from "./version";
@@ -47,6 +48,8 @@ export function SqlConsole({
     }
   });
   const ref = useRef<HTMLTextAreaElement>(null);
+  const highlightRef = useRef<HTMLPreElement>(null);
+  const highlighted = useMemo(() => highlightSql(text), [text]);
   const historyRef = useRef<HTMLDivElement>(null);
   const savedRef = useRef<HTMLDivElement>(null);
   const saveRef = useRef<HTMLDivElement>(null);
@@ -330,14 +333,28 @@ export function SqlConsole({
                 ))}
               </ul>
             )}
-            <textarea
-              id="sql-input"
-              ref={ref}
-              className="sql-editor"
-              value={text}
-              spellCheck={false}
-              rows={Math.max(5, lines)}
-              onChange={(e) => {
+            <div className="sql-editor-stack">
+              <pre
+                ref={highlightRef}
+                className="sql-editor sql-editor-highlight"
+                aria-hidden
+                dangerouslySetInnerHTML={{ __html: highlighted }}
+              />
+              <textarea
+                id="sql-input"
+                ref={ref}
+                className="sql-editor sql-editor-input"
+                value={text}
+                spellCheck={false}
+                rows={Math.max(5, lines)}
+                onScroll={(e) => {
+                  const h = highlightRef.current;
+                  if (h) {
+                    h.scrollTop = e.currentTarget.scrollTop;
+                    h.scrollLeft = e.currentTarget.scrollLeft;
+                  }
+                }}
+                onChange={(e) => {
                 setText(e.target.value);
                 refreshCompletions(e.target.value, e.target.selectionStart ?? e.target.value.length);
               }}
@@ -376,7 +393,8 @@ export function SqlConsole({
                   void run();
                 }
               }}
-            />
+              />
+            </div>
           </div>
         </div>
         <div className="sql-run-bar">
