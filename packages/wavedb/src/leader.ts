@@ -11,6 +11,8 @@ export interface LeaderLease {
   expiresAt: number;
   /** Monotonic generation for fencing (incremented on each successful acquire). */
   generation: number;
+  /** Process that holds the lease (used to reclaim after crash on same host). */
+  pid?: number;
 }
 
 export interface LeaderOptions {
@@ -23,6 +25,28 @@ function leasePath(dataPath: string): string {
   return join(dataPath, ".wave", "leader.json");
 }
 
+/** Host id stored in the lease (Fly machine id when present). */
+export function leaderHostId(): string {
+  return process.env.FLY_MACHINE_ID ?? hostname();
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: unknown) {
+    return (e as NodeJS.ErrnoException)?.code !== "ESRCH";
+  }
+}
+
+/** True when an unexpired lease is from a prior process on this host (e.g. SIGINT without release). */
+export function canReclaimStaleLeaderLease(cur: LeaderLease, host: string): boolean {
+  if (cur.host !== host) return false;
+  if (cur.pid === undefined) return true;
+  return !isProcessAlive(cur.pid);
+}
+
 function readLease(path: string): LeaderLease | null {
   if (!existsSync(path)) return null;
   try {
@@ -33,6 +57,7 @@ function readLease(path: string): LeaderLease | null {
       host: raw.host ?? "",
       expiresAt: raw.expiresAt,
       generation: typeof raw.generation === "number" ? raw.generation : 0,
+      pid: typeof raw.pid === "number" ? raw.pid : undefined,
     };
   } catch {
     return null;
@@ -68,11 +93,11 @@ export function acquireLeaderLease(opts: LeaderOptions): { ok: boolean; lease?: 
   const ttl = opts.ttlMs ?? 15_000;
   const path = leasePath(opts.dataPath);
   const now = Date.now();
-  const host = hostname();
+  const host = leaderHostId();
 
   for (let attempt = 0; attempt < 8; attempt++) {
     const cur = readLease(path);
-    if (cur && cur.expiresAt > now) {
+    if (cur && cur.expiresAt > now && !canReclaimStaleLeaderLease(cur, host)) {
       return {
         ok: false,
         reason: `leader is ${cur.host} until ${new Date(cur.expiresAt).toISOString()}`,
@@ -84,6 +109,7 @@ export function acquireLeaderLease(opts: LeaderOptions): { ok: boolean; lease?: 
       host,
       expiresAt: now + ttl,
       generation: nextGen,
+      pid: process.pid,
     };
     if (writeLeaseCas(path, lease, cur)) {
       return { ok: true, lease };

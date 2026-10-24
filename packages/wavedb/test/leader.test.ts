@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireLeaderLease, renewLeaderLease, releaseLeaderLease } from "../src/leader.ts";
@@ -17,6 +17,30 @@ describe("leader lease", () => {
       releaseLeaderLease({ dataPath: dir }, a.lease!.holder);
       const b = acquireLeaderLease({ dataPath: dir, ttlMs: 5000 });
       expect(b.ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reclaims unexpired lease after same-host process exit", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wave-leader-"));
+    try {
+      const a = acquireLeaderLease({ dataPath: dir, ttlMs: 60_000 });
+      expect(a.ok).toBe(true);
+      const path = join(dir, ".wave", "leader.json");
+      const stale = JSON.parse(readFileSync(path, "utf8")) as {
+        holder: string;
+        host: string;
+        expiresAt: number;
+        generation: number;
+        pid: number;
+      };
+      stale.pid = 9_999_999;
+      writeFileSync(path, JSON.stringify(stale, null, 2));
+      const b = acquireLeaderLease({ dataPath: dir, ttlMs: 60_000 });
+      expect(b.ok).toBe(true);
+      expect(b.lease?.holder).not.toBe(stale.holder);
+      expect(b.lease?.pid).toBe(process.pid);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
