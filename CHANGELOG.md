@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Table browser **row editor**: double-click a cell or use the row edit control for inline popout and full-row edit (requires primary key; engine validation on save).
 - SQL Console **syntax highlighting** for keywords, strings, numbers, and comments (dark-theme tokens).
 - SQL Console **schema autocomplete**: table/column and keyword suggestions from live schema (updates when tables reload).
 - SQL Console **saved queries**: name/description bookmarks with list, load, update, and delete (stored per API prefix in browser localStorage).

@@ -231,7 +231,7 @@ export function App() {
       {route.page === "logs" && <LogsView />}
       {route.page === "table" &&
         (current ? (
-          <TableView table={current} tables={tables} version={version} />
+          <TableView table={current} tables={tables} version={version} onMutate={() => void refresh()} />
         ) : (
           <div className="empty-state">
             <Icon name="table_rows" className="icon-lg" />
