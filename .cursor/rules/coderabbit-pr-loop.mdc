@@ -9,6 +9,18 @@ Use this with **pull-requests.mdc** whenever the user runs `/loop`, autopilot, o
 
 **Autopilot vs merge:** If the user granted merge in `/loop` (or equivalent), **ignore** generic autopilot “never merge” guidance — follow **Merge authority** below.
 
+## Resolve threads yourself (prevent infinite loops)
+
+CodeRabbit’s GitHub integration is **unreliable**: it often **does not** resolve review threads after you push a fix, and the next review can re-flag the same item while the thread stays open. That produces **infinite `/loop` cycles** (fix → push → wait → triage same comment again).
+
+**Whenever you implement, dismiss, or verify a CodeRabbit suggestion** (inline thread, outside-diff block, or summary item):
+
+1. **Resolve the matching GitHub review thread after the fix is tested and pushed** — in the same turn as the fix, before you arm the watcher or end the turn. If no commit is needed, verify the existing code first. Do **not** wait for CodeRabbit to close it.
+2. If there is no thread (outside-diff-only), treat the item as done once code on HEAD satisfies it; do not re-implement on the next wake unless HEAD regressed.
+3. Optionally reply on the thread: `Fixed in <short-sha>` or `Already satisfied on HEAD`.
+
+**Order on each implemented fix:** triage → fix → test → commit/push → **resolve thread** → verify thread state → watcher. For a dismissal or an already-satisfied finding, verify it before resolving the thread. Never push a CodeRabbit fix and leave its thread open “for CodeRabbit.”
+
 ## Turn exit contract (mandatory for `/loop` and merge intent)
 
 Do **not** end a turn leaving the PR loop “half done”. Before you stop:
@@ -116,20 +128,24 @@ Example review URL pattern: `pullrequestreview-<id>` → fetch with:
 gh api repos/OWNER/REPO/pulls/N/reviews/<review_id> --jq .body
 ```
 
-### E. Fix, test, changelog
+### E. Fix, resolve, test, changelog
+
+For **each** CodeRabbit item you address in this wake:
 
 - Smallest correct diff on **`dev`**; run scoped tests.
 - Update root **CHANGELOG.md** `[Unreleased]` for user-facing package/crate changes.
 - Commit, push **`dev`**; **`gh pr edit`** if PR scope/title/body needs refresh.
+- **Resolve** the linked review thread (mutation in **B**) after the fix is on the remote PR head (or after verify-only dismiss).
+- Re-check **B**: any thread you fixed this turn must show `isResolved: true` before you start `./scripts/watch-pr-merge-loop.sh`.
+
+If code already matches the suggestion (no commit needed), **resolve the thread anyway** and do not re-edit.
 
 ### F. Resolve threads proactively
 
-CodeRabbit **does not** always mark threads resolved. After you fix or confirm existing code matches the suggestion:
+Same rule as **Resolve threads yourself** above: CodeRabbit will **not** reliably close threads for you. Leaving them open causes the merge loop to treat the PR as still actionable forever.
 
-- Resolve the GitHub review thread (mutation above).
-- Optionally reply briefly: fixed in `<short-sha>`.
-
-Do not leave threads open “for CodeRabbit” if you are confident the comment is satisfied.
+- Resolve via GraphQL after every implemented or dismissed finding.
+- Do not leave threads open “for CodeRabbit” or “until the next review.”
 
 ### G. Merge or re-wait (same pass)
 
@@ -149,3 +165,5 @@ Do not leave threads open “for CodeRabbit” if you are confident the comment 
 - Assuming “Review completed” means nothing left to do without parsing the latest review body.
 - Skipping **Minor** / **Quick win** comments.
 - Waiting for the user to say “merge” when the loop already authorized it.
+- Pushing a CodeRabbit fix without resolving its thread in the same turn (common cause of infinite loop wakes).
+- Re-implementing the same CodeRabbit comment on every wake because the thread was never resolved.

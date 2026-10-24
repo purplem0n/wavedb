@@ -19,6 +19,7 @@ When a change can affect Wave Studio **directly or indirectly**, exercise the da
 4. **Tooling:** **`cursor-ide-browser`** (or Chrome DevTools MCP). **No Playwright** or extra npm browser deps for this repo.
 5. **One browser tab.** `browser_lock` → viewport **1280×800** → **sequential** flow only: navigate → `browser_snapshot` (verify state) → interact → snapshot again → `browser_take_screenshot` → copy PNG into `docs/wavedb-studio-screenshots/`. Do not parallelize screenshot with navigation/clicks.
 6. Fix console errors, broken routes, and layout/a11y issues before finishing. Mention Studio checks in PR **Test plan** when applicable.
+7. **Smoke routes before merge:** `#/schema`, `#/table/products` (or any seeded table with rows), `#/sql`, `#/logs`. Table routes must show grid chrome and data — a blank main pane or uncaught console error blocks merge.
 
 ## Empty vs populated UI
 
