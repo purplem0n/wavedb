@@ -809,7 +809,7 @@ dependencies = [
 
 [[package]]
 name = "wave-core"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "base64",
  "fjall",
@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "wave-napi"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "napi",
  "napi-build",

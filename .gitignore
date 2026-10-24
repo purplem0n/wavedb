@@ -14,3 +14,5 @@ demo.wave/
 demo.wave/
 tools/bench/results.quick.json
 docs/purplem0n-wavedb-agent-findings.json
+scripts/.pr-loop-state.json
+scripts/.pr-loop-watch.pid

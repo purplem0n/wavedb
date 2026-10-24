@@ -11,6 +11,13 @@ import {
   type ColumnKind,
 } from "./schema.ts";
 
+export interface ForeignKeyDefJson {
+  name?: string;
+  columns: string[];
+  refTable: string;
+  refColumns: string[];
+}
+
 export interface TableDefJson {
   id: number;
   name: string;
@@ -18,6 +25,7 @@ export interface TableDefJson {
   primaryKey: string[];
   autoIncrement: boolean;
   indexes: { id: number; name: string; columns: string[]; unique: boolean }[];
+  foreignKeys?: ForeignKeyDefJson[];
   version: number;
 }
 
@@ -28,6 +36,8 @@ export type SchemaOpKind =
   | "createIndex"
   | "dropIndex"
   | "dropTable"
+  | "addForeignKey"
+  | "dropForeignKey"
   | "rebuildTable"
   | "setAutoIncrement"
   | "conflict";
@@ -47,6 +57,69 @@ export interface SchemaOp {
 
 const enc = (_k: ColumnKind, v: unknown) => encodeValue(v);
 
+function normalizeFk(raw: ForeignKeyDefJson & { ref_table?: string; ref_columns?: string[] }): ForeignKeyDefJson {
+  return {
+    name: raw.name,
+    columns: raw.columns ?? [],
+    refTable: raw.refTable ?? raw.ref_table ?? "",
+    refColumns: raw.refColumns ?? raw.ref_columns ?? [],
+  };
+}
+
+function fkKey(fk: ForeignKeyDefJson): string {
+  const n = normalizeFk(fk);
+  return `${n.columns.join(",")}->${n.refTable}(${n.refColumns.join(",")})`;
+}
+
+function wantedForeignKeys(t: AnyTable): ForeignKeyDefJson[] {
+  const m = tableMeta(t);
+  const out: ForeignKeyDefJson[] = [];
+  for (const c of m.columns) {
+    const ref = c.config.references?.();
+    if (ref) {
+      out.push({
+        columns: [c.name],
+        refTable: ref.table,
+        refColumns: [ref.name],
+      });
+    }
+  }
+  return out;
+}
+
+function inboundFkDependents(existing: TableDefJson[], tableName: string): string[] {
+  const deps: string[] = [];
+  for (const t of existing) {
+    for (const fk of t.foreignKeys ?? []) {
+      if (fk.refTable === tableName && !deps.includes(t.name)) deps.push(t.name);
+    }
+  }
+  return deps;
+}
+
+/** Drop order: tables referenced by others are dropped after dependents. */
+function dropTableOrder(existing: TableDefJson[], names: string[]): string[] {
+  const set = new Set(names);
+  const out: string[] = [];
+  const pending = new Set(names);
+  while (pending.size) {
+    let progressed = false;
+    for (const name of [...pending]) {
+      const deps = inboundFkDependents(existing, name).filter((d) => set.has(d) && pending.has(d));
+      if (deps.length === 0) {
+        out.push(name);
+        pending.delete(name);
+        progressed = true;
+      }
+    }
+    if (!progressed) {
+      out.push(...pending);
+      break;
+    }
+  }
+  return out;
+}
+
 export function diffSchema(
   tables: AnyTable[],
   existing: TableDefJson[],
@@ -58,6 +131,8 @@ export function diffSchema(
   const dropIdx: SchemaOp[] = [];
   const dropCols: SchemaOp[] = [];
   const dropTables: SchemaOp[] = [];
+  const addFks: SchemaOp[] = [];
+  const dropFks: SchemaOp[] = [];
   const byName = new Map(existing.map((t) => [t.name, t]));
   const wantedNames = new Set<string>();
 
@@ -177,33 +252,111 @@ export function diffSchema(
         },
       });
     }
+    const stillWantedFk = new Set(tables.flatMap((tt) => wantedForeignKeys(tt).map(fkKey)));
     for (const c of cur.columns) {
       if (needsRebuild) break;
       if (!wantCols.has(c.name)) {
+        const outboundBlocked = (cur.foreignKeys ?? []).some((fk) => fk.columns.includes(c.name) && !fk.name);
+        const usedByInboundFk =
+          outboundBlocked ||
+          existing.some((t) =>
+            (t.foreignKeys ?? []).some(
+              (fk) =>
+                fk.refTable === m.name && fk.refColumns.includes(c.name) && stillWantedFk.has(fkKey(fk)),
+            ),
+          );
         dropCols.push({
           op: "dropColumn",
           table: m.name,
           description: `drop column ${m.name}.${c.name}`,
           destructive: true,
-          applicable: true,
+          applicable: !usedByInboundFk,
           statement: { kind: "alterTable", table: m.name, action: { op: "dropColumn", name: c.name } },
         });
+        if (usedByInboundFk) {
+          adds.push({
+            op: "conflict",
+            table: m.name,
+            description: `cannot drop column ${m.name}.${c.name}: foreign key constraints depend on it`,
+            destructive: false,
+            applicable: false,
+          });
+        }
+      }
+    }
+    const wantFk = wantedForeignKeys(t);
+    const haveFk = new Map((cur.foreignKeys ?? []).map((fk) => [fkKey(fk), normalizeFk(fk)]));
+    const wantFkMap = new Map(wantFk.map((fk) => [fkKey(fk), fk]));
+    for (const [k, w] of wantFkMap) {
+      if (!haveFk.has(k)) {
+        addFks.push({
+          op: "addForeignKey",
+          table: m.name,
+          description: `add foreign key on ${m.name}(${w.columns.join(", ")}) references ${w.refTable}(${w.refColumns.join(", ")})`,
+          destructive: false,
+          applicable: byName.has(w.refTable) || wantedNames.has(w.refTable),
+          statement: {
+            kind: "alterTable",
+            table: m.name,
+            action: { op: "addForeignKey", fk: w },
+          },
+        });
+        if (!byName.has(w.refTable) && !wantedNames.has(w.refTable)) {
+          adds.push({
+            op: "conflict",
+            table: m.name,
+            description: `foreign key on ${m.name} references missing table ${w.refTable}`,
+            destructive: false,
+            applicable: false,
+          });
+        }
+      }
+    }
+    for (const [k, h] of haveFk) {
+      if (!wantFkMap.has(k)) {
+        const cname = h.name ?? `${m.name}_${h.columns.join("_")}_fkey`;
+        dropFks.push({
+          op: "dropForeignKey",
+          table: m.name,
+          description: `drop foreign key ${cname} on ${m.name}`,
+          destructive: false,
+          applicable: Boolean(h.name),
+          statement: {
+            kind: "alterTable",
+            table: m.name,
+            action: { op: "dropConstraint", name: cname, ifExists: true },
+          },
+        });
+        if (!h.name) {
+          adds.push({
+            op: "conflict",
+            table: m.name,
+            description: `unnamed foreign key on ${m.name} cannot be dropped automatically`,
+            destructive: false,
+            applicable: false,
+          });
+        }
       }
     }
   }
   if (opts.dropMissingTables) {
-    for (const t of existing) {
-      if (!wantedNames.has(t.name) && !t.name.startsWith("_wave_")) {
-        dropTables.push({
-          op: "dropTable",
-          table: t.name,
-          description: `drop table ${t.name}`,
-          destructive: true,
-          applicable: true,
-          statement: { kind: "dropTable", name: t.name, ifExists: true },
-        });
-      }
+    const toDrop = existing.filter((t) => !wantedNames.has(t.name) && !t.name.startsWith("_wave_")).map((t) => t.name);
+    const dropOrder = dropTableOrder(existing, toDrop);
+    const orderIndex = new Map(dropOrder.map((n, i) => [n, i]));
+    for (const name of dropOrder) {
+      const deps = inboundFkDependents(existing, name).filter((d) => toDrop.includes(d));
+      const blocked = deps.some((d) => (orderIndex.get(d) ?? 0) >= (orderIndex.get(name) ?? 0));
+      dropTables.push({
+        op: "dropTable",
+        table: name,
+        description: deps.length
+          ? `drop table ${name} (with ${deps.length} dependent table(s) in this batch)`
+          : `drop table ${name}`,
+        destructive: true,
+        applicable: !blocked,
+        statement: { kind: "dropTable", name, ifExists: true, cascade: deps.length > 0 },
+      });
     }
   }
-  return [...creates, ...adds, ...dropIdx, ...idx, ...dropCols, ...dropTables];
+  return [...creates, ...adds, ...dropFks, ...dropIdx, ...idx, ...addFks, ...dropCols, ...dropTables];
 }

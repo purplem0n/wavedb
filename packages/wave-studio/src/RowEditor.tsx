@@ -34,10 +34,11 @@ export function RowEditor({
         onClick={(e) => e.stopPropagation()}
       >
         <header className="row-editor-head">
-          <h2 id="row-editor-title">
-            Edit row · {table.name}
-          </h2>
-          <button type="button" className="btn-icon" aria-label="Close" onClick={onClose}>
+          <div className="row-editor-title-block">
+            <h2 id="row-editor-title">Edit row</h2>
+            <span className="row-editor-table-name">{table.name}</span>
+          </div>
+          <button type="button" className="btn-icon row-editor-close" aria-label="Close" onClick={onClose}>
             <Icon name="close" className="icon-sm" />
           </button>
         </header>
@@ -58,7 +59,14 @@ export function RowEditor({
                   {readOnly && <span className="row-editor-pk">PK</span>}
                 </span>
                 {readOnly ? (
-                  <div className="row-editor-readonly mono-sm">{display(row[i], def?.type)}</div>
+                  <input className="row-editor-readonly" readOnly value={display(row[i], def?.type)} />
+                ) : def?.type === "json" ? (
+                  <textarea
+                    value={draft[col] ?? ""}
+                    onChange={(e) => onChange(col, e.target.value)}
+                    spellCheck={false}
+                    rows={3}
+                  />
                 ) : (
                   <input
                     value={draft[col] ?? ""}
@@ -74,8 +82,8 @@ export function RowEditor({
           <button type="button" className="btn-secondary" onClick={onClose} disabled={busy}>
             Cancel
           </button>
-          <button type="button" className="btn-run" onClick={onSave} disabled={busy}>
-            {busy ? "Saving…" : "Save row"}
+          <button type="button" className="btn-primary" onClick={onSave} disabled={busy}>
+            {busy ? "Saving…" : "Save changes"}
           </button>
         </footer>
       </div>

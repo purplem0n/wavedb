@@ -14,12 +14,14 @@ alwaysApply: true
 
 # PR merge loops (CodeRabbit + CI)
 
-When the user asks to loop until merge (or similar), each wake after CodeRabbit is **not** `PENDING` / `IN_PROGRESS` / `QUEUED`:
+Follow **coderabbit-pr-loop.mdc** for the full checklist (outside-diff reviews, minor comments, merge authority, and anti-patterns).
 
-1. **Triage** — Read unresolved review threads and any new CodeRabbit inline comments on the open `dev` → `main` PR.
-2. **Fix** — Implement valid findings on `dev`, run relevant tests, update **CHANGELOG** if needed, commit, push, **`gh pr edit`** to refresh title/body.
-3. **Resolve** — Mark GitHub review threads resolved when the code already addresses the comment (or after the fix lands); reply briefly if useful.
-4. **Wait** — If fixes were pushed, expect a new CodeRabbit pass; do **not** merge until CodeRabbit is idle again.
-5. **Merge** — Only when CodeRabbit is idle, **all** review threads are resolved, and PR merge state is **CLEAN**: rebase-merge (or the repo’s usual method) the `dev` → `main` PR.
+Each loop wake on the open **`dev` → `main`** PR:
 
-If CodeRabbit is still running, poll and do nothing else except report status.
+1. **Triage (complete)** — Unresolved review threads, all pull inline comments, **and** CodeRabbit review summary bodies (`Outside diff range comments`). Inline-only triage is not enough.
+2. **Fix** — All still-valid findings on `dev` (including **Minor** / **Quick win**); test; **CHANGELOG**; commit; push; **`gh pr edit`** if needed.
+3. **Resolve** — Resolve GitHub threads yourself when fixed or already satisfied; do not wait for CodeRabbit to close them.
+4. **Wait** — After a push you made, use **`./scripts/watch-pr-merge-loop.sh <N> --wait`** (foreground, long `block_until_ms`) or background + `notify_on_output` on `^AGENT_LOOP_WAKE_pr-merge`. Do not exit the turn on a capped manual poll while checks are pending.
+5. **Merge** — When merge-ready per **coderabbit-pr-loop.mdc** and the user allowed merge in the loop: **`gh pr merge --merge`** in the same pass. Do not stall after green CI + idle CodeRabbit + zero actionable items.
+
+If checks are already idle when you finish work, run triage → merge immediately. If they are not, the watcher must be running before you end the turn.

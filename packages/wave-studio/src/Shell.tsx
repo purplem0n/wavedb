@@ -1,14 +1,15 @@
 import type { ReactNode } from "react";
 import type { TableDef } from "./api";
 import { Icon, RefreshIcon, TableRowIcon, WaveLogo } from "./icons";
+import { waveEngineVersionTag } from "./version";
 
 type Route = { page: "table"; name: string } | { page: "sql" } | { page: "schema" } | { page: "stats" } | { page: "logs" };
 
 const VIEW_NAV = [
   { page: "schema" as const, label: "Schema", hash: "#/schema", icon: "schema" },
   { page: "sql" as const, label: "SQL Console", hash: "#/sql", icon: "terminal" },
-  { page: "logs" as const, label: "Logs & Metrics", hash: "#/logs", icon: "list_alt" },
-  { page: "stats" as const, label: "Stats", hash: "#/stats", icon: "speed" },
+  { page: "logs" as const, label: "Logs & Metrics", hash: "#/logs", icon: "monitoring" },
+  { page: "stats" as const, label: "Stats", hash: "#/stats", icon: "bar_chart" },
 ];
 
 function breadcrumbLabel(route: Route): string {
@@ -46,7 +47,9 @@ export function Shell({
       <aside className="sidebar" aria-label="Database navigation">
         <div className="sidebar-top">
           <div className="sidebar-brand-row">
-            <WaveLogo className="brand-logo" />
+            <div className="brand-logo-wrap" aria-hidden="true">
+              <WaveLogo className="brand-logo" />
+            </div>
             <span className="brand-title">Wave Studio</span>
           </div>
           <nav className="sidebar-views" aria-label="Views">
@@ -109,17 +112,26 @@ export function Shell({
         <header className="top-header">
           <div className="breadcrumb mono-sm">
             <span className="crumb-muted">Wave Studio</span>
-            <span className="crumb-sep">›</span>
+            <span className="crumb-sep">/</span>
             <span className="crumb-current">{crumb}</span>
           </div>
-          <div className={`conn-pill${connected ? "" : " conn-pill--off"}`}>
-            <span className="conn-dot" />
-            <span>{connected ? "Connected" : "Offline"}</span>
+          <div className="top-header-actions">
+            <div className={`conn-pill${connected ? "" : " conn-pill--off"}`}>
+              <span className="conn-dot" />
+              <span>{connected ? "Connected" : "Offline"}</span>
+            </div>
+            <div className="header-user" aria-hidden="true">
+              <Icon name="person" className="icon-sm" />
+            </div>
           </div>
         </header>
         <main id="main" className="main-content" tabIndex={-1}>
           {children}
         </main>
+        <footer className="studio-footer" aria-label="Engine status">
+          <div className="studio-footer-spacer" />
+          <span className="studio-footer-version">{waveEngineVersionTag()}</span>
+        </footer>
       </div>
     </div>
   );

@@ -3,6 +3,7 @@ import { api, describeDefault, type TableDef } from "./api";
 import { Icon } from "./icons";
 import { waveEngineVersionTag } from "./version";
 import { CreateTablePanel, SchemaManagePanel } from "./SchemaManagePanel";
+import { StudioModal } from "./StudioModal";
 
 function bytesShort(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -38,7 +39,7 @@ export function SchemaView({
 
   return (
     <div className="page-pad">
-      <header className="page-head">
+      <header className="page-head page-head--schema">
         <div>
           <div className="page-title-row">
             <h1 className="page-title">Schema</h1>
@@ -48,23 +49,24 @@ export function SchemaView({
             {tables.length} table{tables.length === 1 ? "" : "s"} defined in embedded engine
           </p>
         </div>
-        <div className="schema-head-actions">
-          <button type="button" className="btn-primary" onClick={() => setShowCreate((s) => !s)}>
+        <div className="page-head-toolbar">
+          <button type="button" className="btn-stitch-primary" onClick={() => setShowCreate((s) => !s)}>
+            {!showCreate && <Icon name="add" className="icon-sm" />}
             {showCreate ? "Cancel" : "New table"}
           </button>
-        </div>
-        <div className="search-wrap">
-          <Icon name="search" />
-          <input
-            className="search-input"
-            type="search"
-            placeholder="Filter tables by name..."
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <kbd className="search-kbd">⌘K</kbd>
+          <div className="search-wrap search-wrap--toolbar">
+            <Icon name="search" className="search-icon" />
+            <input
+              className="search-input search-input--toolbar"
+              type="search"
+              placeholder="Filter tables by name..."
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <kbd className="search-kbd search-kbd--hint">⌘K</kbd>
+          </div>
         </div>
       </header>
 
@@ -110,12 +112,26 @@ export function SchemaView({
       </div>
 
       {showCreate && (
-        <CreateTablePanel
-          onDone={() => {
-            setShowCreate(false);
-            onSchemaChange?.();
-          }}
-        />
+        <StudioModal title="Create table" onClose={() => setShowCreate(false)}>
+          <CreateTablePanel
+            onDone={() => {
+              setShowCreate(false);
+              onSchemaChange?.();
+            }}
+          />
+        </StudioModal>
+      )}
+
+      {manageTable && tables.some((t) => t.name === manageTable) && (
+        <StudioModal title={`Manage ${manageTable}`} onClose={() => setManageTable(null)} wide>
+          <SchemaManagePanel
+            table={tables.find((t) => t.name === manageTable)!}
+            onDone={() => {
+              setManageTable(null);
+              onSchemaChange?.();
+            }}
+          />
+        </StudioModal>
       )}
 
       <div className="section-meta">
@@ -145,20 +161,12 @@ export function SchemaView({
                 <span className="schema-card-meta">
                   {t.columns.length} cols · {t.indexes.length} idx
                 </span>
-                <button type="button" className="btn-ghost" onClick={() => setManageTable(manageTable === t.name ? null : t.name)}>
-                  {manageTable === t.name ? "Close" : "Manage"}
+                <button type="button" className="btn-ghost" onClick={() => setManageTable(t.name)}>
+                  Manage
                 </button>
               </div>
             </div>
-            {manageTable === t.name && (
-              <SchemaManagePanel
-                table={t}
-                onDone={() => {
-                  setManageTable(null);
-                  onSchemaChange?.();
-                }}
-              />
-            )}
+            <div className="schema-card-body">
             <table>
               <caption className="sr-only">Columns of {t.name}</caption>
               <thead>
@@ -197,6 +205,7 @@ export function SchemaView({
                 })}
               </tbody>
             </table>
+            </div>
             {t.indexes.length > 0 && (
               <div className="schema-indexes">
                 <h4>Indexes</h4>

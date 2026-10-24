@@ -139,9 +139,9 @@ export function App() {
   if (gate === "loading") {
     return (
       <main className="login">
-        <div className="login-card">
-          <WaveLogo className="brand-logo" />
-          <p>Loading…</p>
+        <div className="login-card login-card--loading">
+          <WaveLogo className="brand-logo brand-logo--pulse" />
+          <p className="login-loading-text">Loading…</p>
         </div>
       </main>
     );
@@ -150,11 +150,11 @@ export function App() {
   if (gate === "setup" || gate === "login") {
     return (
       <main className="login">
-        <div className="login-card">
-          <h1>
+        <div className={`login-card${gate === "setup" ? " login-card--setup" : ""}`}>
+          <div className="login-card-header">
             <WaveLogo className="brand-logo" />
-            Wave Studio
-          </h1>
+            <h1>Wave Studio</h1>
+          </div>
           <p>
             {gate === "setup"
               ? "Create the superuser password. Use the one-time setup token from the server log or .wave/setup.token."
@@ -212,10 +212,10 @@ export function App() {
     return (
       <main className="login">
         <div className="login-card">
-          <h1>
+          <div className="login-card-header">
             <WaveLogo className="brand-logo" />
-            Wave Studio
-          </h1>
+            <h1>Wave Studio</h1>
+          </div>
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -258,11 +258,14 @@ export function App() {
         (current ? (
           <TableView table={current} tables={tables} version={version} onMutate={() => void refresh()} />
         ) : (
-          <div className="empty-state">
-            <Icon name="table_rows" className="icon-lg" />
+          <div className="empty-state empty-state--table-missing">
+            <div className="empty-state-icon" aria-hidden="true">
+              <Icon name="table_chart_view" className="icon-lg" />
+            </div>
             <p>
-              Table “{route.name}” not found.
+              Table <span className="empty-state-name">“{route.name}”</span> not found.
             </p>
+            <p className="empty-state-code">ERR_TABLE_NOT_DEFINED</p>
           </div>
         ))}
     </Shell>

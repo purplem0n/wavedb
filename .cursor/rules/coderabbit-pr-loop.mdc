@@ -1,0 +1,151 @@
+---
+description: CodeRabbit triage, outside-diff comments, and merge decisions for dev→main loops
+alwaysApply: true
+---
+
+# CodeRabbit + merge loops (`dev` → `main`)
+
+Use this with **pull-requests.mdc** whenever the user runs `/loop`, autopilot, or “until merge” on the open **`dev` → `main`** PR.
+
+**Autopilot vs merge:** If the user granted merge in `/loop` (or equivalent), **ignore** generic autopilot “never merge” guidance — follow **Merge authority** below.
+
+## Turn exit contract (mandatory for `/loop` and merge intent)
+
+Do **not** end a turn leaving the PR loop “half done”. Before you stop:
+
+1. **If you just pushed to `dev`** and CI or CodeRabbit can still be running → you **must wait or arm the watcher** (below). Never use a **capped** poll (`for i in 1..10; sleep 30`) and then exit.
+2. **If merge-ready** (checklist below on current `headRefOid`) and the user authorized merge → **`gh pr merge N --merge` in this turn**, then stop watchers.
+3. **If CodeRabbit finished** with actionable items → **triage and fix (or dismiss) in this turn**, push if needed, then wait or merge — do not report “will continue later” without a live watcher.
+4. **If nothing is left to do except waiting on GitHub** → run **`./scripts/watch-pr-merge-loop.sh <N> --wait`** in the foreground with **`block_until_ms` ≥ 900000**, **or** start the same command in the background with **`notify_on_output`** on `^AGENT_LOOP_WAKE_pr-merge`. A blind `sleep 90` heartbeat alone is **not** sufficient after a push.
+
+On every wake (including timer/heartbeat), read **`scripts/.pr-loop-state.json`** if present, re-run checklist on the **current** PR head, then continue A–G.
+
+## Local watcher (`scripts/watch-pr-merge-loop.sh`)
+
+Repo-owned wait for **`rust`**, **`native-and-ts`**, and **CodeRabbit** on the open PR.
+
+```bash
+# Quick status (non-blocking)
+./scripts/watch-pr-merge-loop.sh <N>
+
+# Block until CI + CodeRabbit idle (preferred after push)
+./scripts/watch-pr-merge-loop.sh <N> --wait
+```
+
+- **Foreground:** Shell `block_until_ms` **≥ 900000** (15m); when the script prints `AGENT_LOOP_WAKE_pr-merge`, run triage A–G immediately in the **same** or **next** turn (same session).
+- **Background:** `block_until_ms: 0`, `notify_on_output` pattern `^AGENT_LOOP_WAKE_pr-merge`, **one** watcher per PR; kill **`scripts/.pr-loop-watch.pid`** when merging or when the user stops the loop.
+- **Do not** stack multiple `while true; sleep …` heartbeats; use this script only.
+
+When the wake reason is **`ready_to_triage`**: parse CodeRabbit review bodies (including **Outside diff range comments**), fix, push only if needed, resolve threads, then merge if checklist passes.
+
+## Merge authority
+
+**Merge without asking** when the user:
+
+- Says merge if ready / don’t wait for confirmation / loop until merge / autopilot until merged, or
+- Includes merge intent in the `/loop` prompt.
+
+**Do not merge** only when the user **explicitly** forbids it in the same thread (e.g. “do not merge”, “review only”).
+
+When merge-ready (below), run `gh pr merge <number> --merge` in the **same pass**. Do not report “ready for merge” and arm another long sleep if nothing is left to fix.
+
+## Merge-ready checklist (all required)
+
+1. PR is **OPEN**, **MERGEABLE**, merge state **CLEAN** (or equivalent).
+2. Required CI **success**: at minimum **`rust`** and **`native-and-ts`** on the current PR head.
+3. **CodeRabbit** check is **`pass`** / **`success`** on the current head (treat `pending`, `in progress`, `queued`, `fail`, `failure`, and any other state as **not** complete).
+4. **No actionable CodeRabbit findings** left after full triage (inline **and** outside-diff — see below).
+5. **All** GitHub **review threads resolved** (you may resolve them after verifying the fix).
+
+If (1)–(4) hold but (5) has stale open threads for code already fixed: **resolve those threads**, then merge.
+
+If you push fixes: re-run the checklist on the **new** head (wait for CI + CodeRabbit idle before merge).
+
+## CodeRabbit triage — every loop wake (mandatory)
+
+**Inline-only triage is incomplete.** CodeRabbit often puts findings only in the **review summary** under **Outside diff range comments** (GitHub cannot attach them to the diff). Those never show up as unresolved inline threads.
+
+### A. Refresh PR head and checks
+
+```bash
+gh pr view <n> --json number,headRefOid,mergeable,mergeStateStatus,state,statusCheckRollup
+gh pr checks <n>
+```
+
+### B. Unresolved review threads (GraphQL)
+
+Paginate **every** GitHub collection before merge: GraphQL `reviewThreads` with cursor pagination (`first` + `after` until `hasNextPage` is false), and REST with `gh api --paginate` for pull comments and review lists.
+
+```graphql
+query($cursor: String) { repository(owner:"OWNER", name:"REPO") { pullRequest(number:N) {
+  reviewThreads(first:100, after: $cursor) { pageInfo { hasNextPage endCursor }
+    nodes { id isResolved path line
+    comments(last:1) { nodes { body author { login } } } } } } } }
+```
+
+Fix or dismiss each unresolved thread; then resolve via:
+
+```graphql
+mutation { resolveReviewThread(input: {threadId: "PRRT_..."}) { thread { isResolved } } }
+```
+
+### C. Pull request inline comments
+
+```bash
+gh api --paginate repos/OWNER/REPO/pulls/N/comments
+```
+
+Include comments on **older commits** if the finding still applies to current code. Ignore bodies that say **Addressed in commit …** only after you **verify** on HEAD.
+
+### D. CodeRabbit review bodies (outside diff + summary)
+
+```bash
+gh api repos/OWNER/REPO/pulls/N/reviews \
+  --jq '.[] | select(.user.login|test("coderabbit";"i")) | {id, commit_id, submitted_at, body}'
+```
+
+For **each** CodeRabbit review (prioritize reviews whose `commit_id` matches PR head, then the newest):
+
+1. If the body contains **`Outside diff range comments`** or **outside the diff**, read **every** nested block (usually `<details><summary>… · <code>path:line</code>`). Extract path and line range; implement valid fixes on `dev`.
+2. Note **`Actionable comments posted: N`**. If N > 0, ensure all N are accounted for (inline + outside-diff), not only open threads.
+3. Treat **Minor**, **Quick win**, and **Major** the same for implementation: if the finding is still valid, fix it. Do not skip “minor” items to save time.
+
+Example review URL pattern: `pullrequestreview-<id>` → fetch with:
+
+```bash
+gh api repos/OWNER/REPO/pulls/N/reviews/<review_id> --jq .body
+```
+
+### E. Fix, test, changelog
+
+- Smallest correct diff on **`dev`**; run scoped tests.
+- Update root **CHANGELOG.md** `[Unreleased]` for user-facing package/crate changes.
+- Commit, push **`dev`**; **`gh pr edit`** if PR scope/title/body needs refresh.
+
+### F. Resolve threads proactively
+
+CodeRabbit **does not** always mark threads resolved. After you fix or confirm existing code matches the suggestion:
+
+- Resolve the GitHub review thread (mutation above).
+- Optionally reply briefly: fixed in `<short-sha>`.
+
+Do not leave threads open “for CodeRabbit” if you are confident the comment is satisfied.
+
+### G. Merge or re-wait (same pass)
+
+| State | Action |
+|--------|--------|
+| User granted merge + checklist pass on current head | **`gh pr merge N --merge`**; stop loop timers |
+| Fixes just pushed | `./scripts/watch-pr-merge-loop.sh N --wait` (or background + notify); repeat A–G on new head |
+| CodeRabbit still running | **Watcher only** — **do not** treat as merge-ready; **do not** end turn without `--wait` or background watcher |
+| CI green + CodeRabbit idle + no actionable items + threads resolved | **Merge** (if merge authority); do not wait for user |
+
+## Anti-patterns
+
+- Ending a `/loop` turn after push while CodeRabbit/CI may still run, with only a vague “heartbeat” and no `watch-pr-merge-loop.sh`.
+- Capped poll loops then exiting (e.g. ten × 30s) while CodeRabbit is still **Review in progress**.
+- Polling for an hour after CI and CodeRabbit are already green with zero open findings.
+- Triage only GraphQL unresolved threads and inline comments, **missing outside-diff** review text.
+- Assuming “Review completed” means nothing left to do without parsing the latest review body.
+- Skipping **Minor** / **Quick win** comments.
+- Waiting for the user to say “merge” when the loop already authorized it.

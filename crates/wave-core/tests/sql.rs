@@ -861,6 +861,56 @@ fn commutative_returning_replays_deltas_in_order() {
 }
 
 #[test]
+fn foreign_key_allows_self_reference_on_create_table() {
+    let (_d, db) = open_tmp();
+    q(
+        &db,
+        "CREATE TABLE tree (id INT PRIMARY KEY, parent_id INT, FOREIGN KEY (parent_id) REFERENCES tree(id))",
+    );
+}
+
+#[test]
+fn foreign_key_create_rejects_missing_parent() {
+    let (_d, db) = open_tmp();
+    let e = db
+        .execute_sql(
+            "CREATE TABLE orphan (id INT PRIMARY KEY, pid INT, FOREIGN KEY (pid) REFERENCES missing(id))",
+            &[],
+        )
+        .unwrap_err();
+    assert!(matches!(e, Error::Constraint(_)), "{e}");
+}
+
+#[test]
+fn foreign_key_drop_table_restrict_and_cascade() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE fk_p (id INT PRIMARY KEY)");
+    q(
+        &db,
+        "CREATE TABLE fk_c (id INT PRIMARY KEY, pid INT, FOREIGN KEY (pid) REFERENCES fk_p(id))",
+    );
+    let e = db.execute_sql("DROP TABLE fk_p", &[]).unwrap_err();
+    assert!(matches!(e, Error::Constraint(_)), "{e}");
+    q(&db, "DROP TABLE fk_p CASCADE");
+    assert!(db.execute_sql("SELECT * FROM fk_c", &[]).is_err());
+}
+
+#[test]
+fn foreign_key_add_and_drop_constraint() {
+    let (_d, db) = open_tmp();
+    q(&db, "CREATE TABLE ac_p (id INT PRIMARY KEY)");
+    q(&db, "CREATE TABLE ac_c (id INT PRIMARY KEY, pid INT)");
+    q(
+        &db,
+        "ALTER TABLE ac_c ADD CONSTRAINT ac_c_pid_fkey FOREIGN KEY (pid) REFERENCES ac_p(id)",
+    );
+    let e = db.execute_sql("INSERT INTO ac_c VALUES (1, 9)", &[]).unwrap_err();
+    assert!(matches!(e, Error::Constraint(_)), "{e}");
+    q(&db, "ALTER TABLE ac_c DROP CONSTRAINT ac_c_pid_fkey");
+    q(&db, "INSERT INTO ac_c VALUES (2, 9)");
+}
+
+#[test]
 fn foreign_key_rejects_orphan_insert() {
     let (_d, db) = open_tmp();
     q(&db, "CREATE TABLE fk_parent (id INT PRIMARY KEY)");

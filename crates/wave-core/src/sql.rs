@@ -96,6 +96,7 @@ fn conv_stmt(s: &a::Statement, cx: &mut Cx) -> Result<Statement> {
             if_exists,
             names,
             table,
+            cascade,
             ..
         } => {
             if names.len() != 1 {
@@ -106,6 +107,7 @@ fn conv_stmt(s: &a::Statement, cx: &mut Cx) -> Result<Statement> {
                 a::ObjectType::Table => Ok(Statement::DropTable {
                     name,
                     if_exists: *if_exists,
+                    cascade: *cascade,
                 }),
                 a::ObjectType::Index => Ok(Statement::DropIndex {
                     name,
@@ -150,6 +152,23 @@ fn conv_stmt(s: &a::Statement, cx: &mut Cx) -> Result<Statement> {
                     a::RenameTableNameKind::As(n) | a::RenameTableNameKind::To(n) => AlterAction::RenameTable {
                         to: ident_name(n)?,
                     },
+                },
+                a::AlterTableOperation::AddConstraint { constraint, not_valid } => {
+                    if *not_valid {
+                        return unsupported("NOT VALID constraints");
+                    }
+                    match constraint {
+                        a::TableConstraint::ForeignKey(fk) => AlterAction::AddForeignKey { fk: conv_fk(fk)? },
+                        _ => return unsupported("ADD CONSTRAINT (supported: FOREIGN KEY)"),
+                    }
+                }
+                a::AlterTableOperation::DropConstraint {
+                    if_exists,
+                    name,
+                    ..
+                } => AlterAction::DropConstraint {
+                    name: name.value.clone(),
+                    if_exists: *if_exists,
                 },
                 _ => return unsupported("this ALTER TABLE operation"),
             };
@@ -499,6 +518,7 @@ fn map_type(dt: &DataType) -> Result<(ColumnType, bool)> {
 
 fn conv_fk(fk: &a::ForeignKeyConstraint) -> Result<ForeignKeyDef> {
     Ok(ForeignKeyDef {
+        name: fk.name.as_ref().map(|n| n.value.clone()),
         columns: fk.columns.iter().map(|i| i.value.clone()).collect(),
         ref_table: ident_name(&fk.foreign_table)?,
         ref_columns: fk.referred_columns.iter().map(|i| i.value.clone()).collect(),

@@ -158,7 +158,7 @@ export function SqlConsole({
   }
 
   return (
-    <section aria-labelledby="sql-title">
+    <section className="view-page sql-page" aria-labelledby="sql-title">
       <div className="sql-page-head">
         <div>
           <div className="sql-kicker">
