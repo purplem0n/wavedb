@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, describeDefault, type TableDef } from "./api";
 import { Icon } from "./icons";
 import { waveEngineVersionTag } from "./version";
-import { CreateTablePanel, SchemaManagePanel } from "./SchemaManagePanel";
+import { CreateTablePanel } from "./SchemaManagePanel";
 import { StudioModal } from "./StudioModal";
 
 function bytesShort(n: number): string {
@@ -19,14 +19,15 @@ function bytesShort(n: number): string {
 export function SchemaView({
   tables,
   onOpen,
+  onEditTable,
   onSchemaChange,
 }: {
   tables: TableDef[];
   onOpen: (name: string) => void;
+  onEditTable: (name: string) => void;
   onSchemaChange?: () => void;
 }) {
   const [filter, setFilter] = useState("");
-  const [manageTable, setManageTable] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [diskBytes, setDiskBytes] = useState<number | null>(null);
 
@@ -45,9 +46,6 @@ export function SchemaView({
             <h1 className="page-title">Schema</h1>
             <span className="pill-version">{waveEngineVersionTag(" engine")}</span>
           </div>
-          <p className="page-sub">
-            {tables.length} table{tables.length === 1 ? "" : "s"} defined in embedded engine
-          </p>
         </div>
         <div className="page-head-toolbar">
           <button type="button" className="btn-stitch-primary" onClick={() => setShowCreate((s) => !s)}>
@@ -70,45 +68,29 @@ export function SchemaView({
         </div>
       </header>
 
-      <div className="summary-grid">
-        <div className="summary-card">
-          <div>
-            <span className="summary-label">Table Count</span>
-            <div>
-              <span className="summary-value">{tables.length}</span>
-              <span className="summary-unit">Tables</span>
-            </div>
-          </div>
-          <div className="summary-icon">
-            <Icon name="dataset" className="icon-lg" />
-          </div>
+      <div className="schema-stats-bar" aria-label="Schema summary">
+        <div className="schema-stats-bar-metrics">
+          <span className="schema-stat">
+            <Icon name="dataset" className="icon-sm" />
+            <strong>{tables.length}</strong>
+            <span className="schema-stat-label">tables</span>
+          </span>
+          <span className="schema-stat-sep" aria-hidden="true" />
+          <span className="schema-stat">
+            <Icon name="account_tree" className="icon-sm" />
+            <strong>{indexCount}</strong>
+            <span className="schema-stat-label">indexes</span>
+          </span>
+          <span className="schema-stat-sep" aria-hidden="true" />
+          <span className="schema-stat">
+            <Icon name="hard_drive" className="icon-sm" />
+            <strong>{diskBytes === null ? "…" : bytesShort(diskBytes)}</strong>
+            {diskBytes !== null && <span className="schema-stat-label">on disk</span>}
+          </span>
         </div>
-        <div className="summary-card">
-          <div>
-            <span className="summary-label">Total Indexes</span>
-            <div>
-              <span className="summary-value summary-value--primary">{indexCount}</span>
-              <span className="summary-unit">Indexes</span>
-            </div>
-          </div>
-          <div className="summary-icon summary-icon--secondary">
-            <Icon name="account_tree" className="icon-lg" />
-          </div>
-        </div>
-        <div className="summary-card">
-          <div>
-            <span className="summary-label">On-disk Size</span>
-            <div>
-              <span className="summary-value summary-value--tertiary">
-                {diskBytes === null ? "…" : bytesShort(diskBytes).split(" ")[0]}
-              </span>
-              <span className="summary-unit">{diskBytes === null ? "" : bytesShort(diskBytes).split(" ")[1] ?? "B"}</span>
-            </div>
-          </div>
-          <div className="summary-icon summary-icon--tertiary">
-            <Icon name="hard_drive" className="icon-lg" />
-          </div>
-        </div>
+        <span className="schema-stats-showing">
+          Showing <strong>{visible.length}</strong> of {tables.length} tables
+        </span>
       </div>
 
       {showCreate && (
@@ -121,26 +103,6 @@ export function SchemaView({
           />
         </StudioModal>
       )}
-
-      {manageTable && tables.some((t) => t.name === manageTable) && (
-        <StudioModal title={`Manage ${manageTable}`} onClose={() => setManageTable(null)} wide>
-          <SchemaManagePanel
-            table={tables.find((t) => t.name === manageTable)!}
-            onDone={() => {
-              setManageTable(null);
-              onSchemaChange?.();
-            }}
-          />
-        </StudioModal>
-      )}
-
-      <div className="section-meta">
-        <span>Active Engine Entities</span>
-        <span className="crumb-sep">•</span>
-        <span>
-          Showing <strong>{visible.length}</strong> of {tables.length} tables
-        </span>
-      </div>
 
       {tables.length === 0 && (
         <p className="empty-state">No tables yet. Create one in the SQL console or push a schema with <code>wave push</code>.</p>
@@ -161,8 +123,9 @@ export function SchemaView({
                 <span className="schema-card-meta">
                   {t.columns.length} cols · {t.indexes.length} idx
                 </span>
-                <button type="button" className="btn-ghost" onClick={() => setManageTable(t.name)}>
-                  Manage
+                <button type="button" className="btn-schema-edit" onClick={() => onEditTable(t.name)}>
+                  <Icon name="edit" className="icon-sm" />
+                  Edit
                 </button>
               </div>
             </div>

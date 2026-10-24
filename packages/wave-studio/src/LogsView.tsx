@@ -69,69 +69,81 @@ export function LogsView() {
     });
   }, [entries, filter, search]);
 
+  const readCount = metrics?.totalReads;
+  const writeCount = metrics?.totalWrites;
+  const otherCount = metrics?.totalOther;
+
   return (
-    <section className="view-page" aria-labelledby="logs-title">
-      <div className="stats-banner">
-        <div className="stats-banner-inner">
+    <div className="logs-page" aria-labelledby="logs-title">
+      <div className="logs-page-chrome">
+        <header className="page-head page-head--schema">
           <div>
-            <div className="stats-title-row">
-              <h1 id="logs-title" className="stats-title">
-                Logs &amp; Metrics
+            <div className="page-title-row">
+              <h1 id="logs-title" className="page-title">
+                Logs
               </h1>
               <span className="pill-live">LIVE</span>
             </div>
-            <div className="stats-sub">
-              <span>Query stream from this Wave server</span>
-              <span className="dot" style={{ width: 4, height: 4, borderRadius: "50%", background: "var(--outline)" }} />
-              <span className="mono-sm">Polling every 1s</span>
+          </div>
+          <div className="page-head-toolbar logs-head-toolbar">
+            <label className="logs-kind-select">
+              <span className="sr-only">Filter by query kind</span>
+              <select value={filter} onChange={(e) => setFilter(e.target.value as QueryKind | "all")} aria-label="Filter by query kind">
+                <option value="all">All kinds</option>
+                <option value="read">Read</option>
+                <option value="write">Write</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+            <div className="search-wrap search-wrap--toolbar">
+              <Icon name="search" className="search-icon" />
+              <input
+                className="search-input search-input--toolbar"
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search SQL…"
+                spellCheck={false}
+                autoComplete="off"
+                aria-label="Search SQL in log"
+              />
             </div>
           </div>
+        </header>
+
+        {error && (
+          <p role="alert" className="alert alert--error logs-page-error">
+            {error}
+          </p>
+        )}
+
+        <div className="schema-stats-bar logs-page-stats" aria-label="Query metrics">
+          <div className="schema-stats-bar-metrics">
+            <span className="schema-stat">
+              <Icon name="menu_book" className="icon-sm" />
+              <strong>{readCount === undefined ? "…" : readCount.toLocaleString()}</strong>
+              <span className="schema-stat-label">reads</span>
+            </span>
+            <span className="schema-stat-sep" aria-hidden="true" />
+            <span className="schema-stat">
+              <Icon name="edit_note" className="icon-sm" />
+              <strong>{writeCount === undefined ? "…" : writeCount.toLocaleString()}</strong>
+              <span className="schema-stat-label">writes</span>
+            </span>
+            <span className="schema-stat-sep" aria-hidden="true" />
+            <span className="schema-stat">
+              <Icon name="more_horiz" className="icon-sm" />
+              <strong>{otherCount === undefined ? "…" : otherCount.toLocaleString()}</strong>
+              <span className="schema-stat-label">other</span>
+            </span>
+          </div>
+          <span className="schema-stats-showing">
+            Showing <strong>{visible.length}</strong> of {entries.length} entries
+          </span>
         </div>
       </div>
 
-      {error && (
-        <p role="alert" className="alert alert--error">
-          {error}
-        </p>
-      )}
-
-      <dl className="metric-grid metric-grid--3">
-        {(
-          [
-            ["Total reads", metrics?.totalReads ?? "…", "SELECT / read queries"],
-            ["Total writes", metrics?.totalWrites ?? "…", "INSERT, UPDATE, DELETE, DDL"],
-            ["Other", metrics?.totalOther ?? "…", "Transactions and unrecognized statements"],
-          ] as const
-        ).map(([k, v, d]) => (
-          <div key={k} className="metric-card">
-            <div>
-              <div className="metric-card-head">
-                <span className="metric-label">{k}</span>
-                <Icon name="analytics" className="icon-md" style={{ color: "var(--primary)" }} />
-              </div>
-              <p className="metric-value">{typeof v === "number" ? v.toLocaleString() : v}</p>
-              <p className="metric-desc">{d}</p>
-            </div>
-          </div>
-        ))}
-      </dl>
-
-      <div className="logs-toolbar">
-        <label className="logs-filter">
-          <span className="metric-label">Filter</span>
-          <select value={filter} onChange={(e) => setFilter(e.target.value as QueryKind | "all")}>
-            <option value="all">All</option>
-            <option value="read">Read</option>
-            <option value="write">Write</option>
-            <option value="other">Other</option>
-          </select>
-        </label>
-        <label className="logs-search">
-          <span className="metric-label">Search SQL</span>
-          <input type="search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter log text…" />
-        </label>
-      </div>
-
+      <div className="logs-page-body">
       <div className="logs-table-wrap">
         <table className="logs-table">
           <thead>
@@ -169,6 +181,7 @@ export function LogsView() {
           </tbody>
         </table>
       </div>
-    </section>
+      </div>
+    </div>
   );
 }

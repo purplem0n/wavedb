@@ -4,7 +4,7 @@ import { tableWhereClause, validateTableFilter } from "./tableFilter";
 import { emptyRule, TableFilterUi } from "./TableFilterUi";
 import { uiFiltersToWhere } from "./uiFilter";
 import { DataGrid } from "./DataGrid";
-import { RefreshIcon } from "./icons";
+import { Icon, RefreshIcon } from "./icons";
 import { RowEditor } from "./RowEditor";
 import { buildUpdateSql, parseCellInput } from "./rowEdit";
 import { waveEngineVersionTag } from "./version";
@@ -163,33 +163,47 @@ export function TableView({
           </>
         )}
         <div className="filter-actions">
-          <button type="submit" className="btn-primary">
-            Apply filters
-          </button>
-          <button
-            type="button"
-            className="btn-ghost"
-            onClick={() => {
-              setAdvancedSql((a) => !a);
-              setError(null);
-            }}
-          >
-            {advancedSql ? "Simple filters" : "Advanced SQL"}
-          </button>
-          {(applied || uiRulesList.some((r) => r.value)) && (
+          <div className="filter-actions-lead">
+            {!advancedSql && (
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={() => setUiRulesList((rules) => [...rules, emptyRule(table.columns)])}
+              >
+                <Icon name="add" className="icon-sm" />
+                Add filter
+              </button>
+            )}
+            <button type="submit" className="btn-primary">
+              Apply filters
+            </button>
+          </div>
+          <div className="filter-actions-trail">
             <button
               type="button"
               className="btn-ghost"
               onClick={() => {
-                setFilter("");
-                setApplied("");
-                setUiRulesList([emptyRule(table.columns)]);
-                setPage(0);
+                setAdvancedSql((a) => !a);
+                setError(null);
               }}
             >
-              Clear
+              {advancedSql ? "Simple filters" : "Advanced SQL"}
             </button>
-          )}
+            {(applied || uiRulesList.some((r) => r.value)) && (
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => {
+                  setFilter("");
+                  setApplied("");
+                  setUiRulesList([emptyRule(table.columns)]);
+                  setPage(0);
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </div>
       </form>
 
@@ -210,6 +224,7 @@ export function TableView({
             schema={tables}
             tableDef={table}
             editable={canEdit}
+            editingCell={cellEdit ? { row: cellEdit.row, col: cellEdit.col } : null}
             types={Object.fromEntries(table.columns.map((c) => [c.name, c.type]))}
             onSort={(c) => {
               setPage(0);

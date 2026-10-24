@@ -8,7 +8,7 @@ type Route = { page: "table"; name: string } | { page: "sql" } | { page: "schema
 const VIEW_NAV = [
   { page: "schema" as const, label: "Schema", hash: "#/schema", icon: "schema" },
   { page: "sql" as const, label: "SQL Console", hash: "#/sql", icon: "terminal" },
-  { page: "logs" as const, label: "Logs & Metrics", hash: "#/logs", icon: "monitoring" },
+  { page: "logs" as const, label: "Logs", hash: "#/logs", icon: "monitoring" },
   { page: "stats" as const, label: "Stats", hash: "#/stats", icon: "bar_chart" },
 ];
 
@@ -16,7 +16,7 @@ function breadcrumbLabel(route: Route): string {
   if (route.page === "table") return route.name;
   if (route.page === "sql") return "SQL console";
   if (route.page === "stats") return "Stats";
-  if (route.page === "logs") return "Logs & Metrics";
+  if (route.page === "logs") return "Logs";
   return "Schema";
 }
 
@@ -27,6 +27,7 @@ export function Shell({
   tablesLoading,
   reloadNotice,
   onRefresh,
+  onEditTable,
   children,
 }: {
   route: Route;
@@ -35,12 +36,15 @@ export function Shell({
   tablesLoading?: boolean;
   reloadNotice?: string | null;
   onRefresh: () => void;
+  onEditTable: (tableName: string) => void;
   children: ReactNode;
 }) {
   const crumb = breadcrumbLabel(route);
 
+  const tableRoute = route.page === "table";
+
   return (
-    <div className="studio-root">
+    <div className={`studio-root${tableRoute ? " studio-root--table" : ""}`}>
       <a className="skip" href="#main">
         Skip to content
       </a>
@@ -75,15 +79,24 @@ export function Shell({
                 tables.map((t) => {
                   const active = route.page === "table" && route.name === t.name;
                   return (
-                    <a
-                      key={t.name}
-                      href={`#/table/${encodeURIComponent(t.name)}`}
-                      className={`nav-table${active ? " active" : ""}`}
-                      aria-current={active ? "page" : undefined}
-                    >
-                      <TableRowIcon active={active} />
-                      <span>{t.name}</span>
-                    </a>
+                    <div key={t.name} className={`nav-table${active ? " active" : ""}`}>
+                      <a
+                        href={`#/table/${encodeURIComponent(t.name)}`}
+                        className="nav-table-link"
+                        aria-current={active ? "page" : undefined}
+                      >
+                        <TableRowIcon active={active} />
+                        <span>{t.name}</span>
+                      </a>
+                      <button
+                        type="button"
+                        className="btn-sidebar-table-edit"
+                        aria-label={`Edit ${t.name}`}
+                        onClick={() => onEditTable(t.name)}
+                      >
+                        <Icon name="edit" className="icon-sm" />
+                      </button>
+                    </div>
                   );
                 })
               )}
@@ -128,10 +141,12 @@ export function Shell({
         <main id="main" className="main-content" tabIndex={-1}>
           {children}
         </main>
-        <footer className="studio-footer" aria-label="Engine status">
-          <div className="studio-footer-spacer" />
-          <span className="studio-footer-version">{waveEngineVersionTag()}</span>
-        </footer>
+        {!tableRoute && (
+          <footer className="studio-footer" aria-label="Engine status">
+            <div className="studio-footer-spacer" />
+            <span className="studio-footer-version">{waveEngineVersionTag()}</span>
+          </footer>
+        )}
       </div>
     </div>
   );
