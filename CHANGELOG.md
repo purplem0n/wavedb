@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- GitHub Release notes are taken from `[Unreleased]` in this file when native packages ship; CI clears `[Unreleased]` on `main` after each release and rebases `dev` onto `main` so both branches stay aligned.
+- GitHub Release notes are taken from `[Unreleased]` in this file when native packages ship; CI clears `[Unreleased]` on `main` (only for the latest release when `main` is at that tag) and rebases `dev` onto `main` so both branches stay aligned.
 - One-time web setup credential: `.wave/setup.token` on first boot (or `WAVE_SETUP_TOKEN`) required for `POST /api/auth/setup` when the admin is not pre-provisioned via `WAVE_ADMIN_PASSWORD`.
 
 ### Fixed
