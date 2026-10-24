@@ -10,4 +10,4 @@ alwaysApply: true
 - Write user-facing bullets for operators and integrators, not internal refactors.
 - **Do not** add entries for **`examples/`**-only changes (example sync is required but not changelog-listed).
 - Before opening a PR, confirm CHANGELOG is updated on the same branch.
-- On each **GitHub Release** (native release workflow), CI publishes everything under `[Unreleased]` as the release notes, then resets `CHANGELOG.md` to an empty `[Unreleased]` on `main` and **rebases `dev` onto `main`** (`--force-with-lease`) so integration branch matches the cleared changelog. Past release text lives on GitHub Releases, not in the file.
+- On each **GitHub Release** (native release workflow), CI publishes everything under `[Unreleased]` as the release notes. It resets `CHANGELOG.md` on `main` and **rebases `dev` onto `main`** only when the release tag is the **latest** `v*` tag and **`main` points at that tag** (avoids wiping newer `[Unreleased]` entries on reruns or old-tag dispatch). Past release text lives on GitHub Releases, not in the file.
