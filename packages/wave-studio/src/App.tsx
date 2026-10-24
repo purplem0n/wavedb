@@ -225,7 +225,9 @@ export function App() {
           {error}
         </p>
       )}
-      {route.page === "schema" && <SchemaView tables={tables} onOpen={(n) => go(`#/table/${encodeURIComponent(n)}`)} />}
+      {route.page === "schema" && (
+        <SchemaView tables={tables} onOpen={(n) => go(`#/table/${encodeURIComponent(n)}`)} onSchemaChange={() => void refresh()} />
+      )}
       {route.page === "sql" && <SqlConsole tables={tables} onChanged={() => void refresh()} />}
       {route.page === "stats" && <StatsView onChanged={() => void refresh()} />}
       {route.page === "logs" && <LogsView />}

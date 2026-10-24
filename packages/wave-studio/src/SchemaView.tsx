@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, describeDefault, type TableDef } from "./api";
 import { Icon } from "./icons";
 import { waveEngineVersionTag } from "./version";
+import { CreateTablePanel, SchemaManagePanel } from "./SchemaManagePanel";
 
 function bytesShort(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -14,8 +15,18 @@ function bytesShort(n: number): string {
   return i === 0 ? `${n.toFixed(0)} ${u[i]}` : `${n.toFixed(1)} ${u[i]}`;
 }
 
-export function SchemaView({ tables, onOpen }: { tables: TableDef[]; onOpen: (name: string) => void }) {
+export function SchemaView({
+  tables,
+  onOpen,
+  onSchemaChange,
+}: {
+  tables: TableDef[];
+  onOpen: (name: string) => void;
+  onSchemaChange?: () => void;
+}) {
   const [filter, setFilter] = useState("");
+  const [manageTable, setManageTable] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
   const [diskBytes, setDiskBytes] = useState<number | null>(null);
 
   useEffect(() => {
@@ -36,6 +47,11 @@ export function SchemaView({ tables, onOpen }: { tables: TableDef[]; onOpen: (na
           <p className="page-sub">
             {tables.length} table{tables.length === 1 ? "" : "s"} defined in embedded engine
           </p>
+        </div>
+        <div className="schema-head-actions">
+          <button type="button" className="btn-primary" onClick={() => setShowCreate((s) => !s)}>
+            {showCreate ? "Cancel" : "New table"}
+          </button>
         </div>
         <div className="search-wrap">
           <Icon name="search" />
@@ -93,6 +109,15 @@ export function SchemaView({ tables, onOpen }: { tables: TableDef[]; onOpen: (na
         </div>
       </div>
 
+      {showCreate && (
+        <CreateTablePanel
+          onDone={() => {
+            setShowCreate(false);
+            onSchemaChange?.();
+          }}
+        />
+      )}
+
       <div className="section-meta">
         <span>Active Engine Entities</span>
         <span className="crumb-sep">•</span>
@@ -116,10 +141,24 @@ export function SchemaView({ tables, onOpen }: { tables: TableDef[]; onOpen: (na
                   {t.name}
                 </button>
               </h2>
-              <span className="schema-card-meta">
-                {t.columns.length} cols · {t.indexes.length} idx
-              </span>
+              <div className="schema-card-actions">
+                <span className="schema-card-meta">
+                  {t.columns.length} cols · {t.indexes.length} idx
+                </span>
+                <button type="button" className="btn-ghost" onClick={() => setManageTable(manageTable === t.name ? null : t.name)}>
+                  {manageTable === t.name ? "Close" : "Manage"}
+                </button>
+              </div>
             </div>
+            {manageTable === t.name && (
+              <SchemaManagePanel
+                table={t}
+                onDone={() => {
+                  setManageTable(null);
+                  onSchemaChange?.();
+                }}
+              />
+            )}
             <table>
               <caption className="sr-only">Columns of {t.name}</caption>
               <thead>
