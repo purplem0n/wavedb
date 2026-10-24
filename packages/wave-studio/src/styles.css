@@ -314,9 +314,31 @@ code,
   transition: background 0.15s, color 0.15s;
 }
 
-.btn-reload-tables:hover {
+.btn-reload-tables:hover:not(:disabled) {
   background: var(--surface-container);
   color: var(--on-surface);
+}
+
+.btn-reload-tables:disabled {
+  opacity: 0.85;
+  cursor: wait;
+}
+
+.btn-reload-tables.is-loading svg {
+  animation: reload-spin 0.8s linear infinite;
+}
+
+@keyframes reload-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.reload-notice {
+  margin: 6px 0 0;
+  font-size: 10px;
+  text-align: center;
+  color: var(--on-surface-variant);
 }
 
 .studio-frame {

@@ -19,4 +19,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Studio **Reload tables**: shows loading/disabled state, brief success or failure status, and still bumps table data when the catalog fetch completes.
 - Engine stats: commits, conflicts, rollbacks, and fsync batch counters persist in database meta and survive process restart; Studio labels note which stats are session-only.

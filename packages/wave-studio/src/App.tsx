@@ -29,6 +29,8 @@ export function App() {
   const [confirm, setConfirm] = useState("");
   const [setupToken, setSetupToken] = useState("");
   const [tokenInput, setTokenInput] = useState(getToken());
+  const [tablesLoading, setTablesLoading] = useState(false);
+  const [reloadNotice, setReloadNotice] = useState<string | null>(null);
   useEffect(() => {
     const on = () => setRoute(parseHash());
     window.addEventListener("hashchange", on);
@@ -44,11 +46,14 @@ export function App() {
   }, []);
 
   const refresh = useCallback(async () => {
+    setTablesLoading(true);
+    setReloadNotice(null);
     try {
       setTables(await api.tables());
       setError(null);
       setGate("ok");
       setVersion((v) => v + 1);
+      setReloadNotice("Tables updated");
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         try {
@@ -60,9 +65,20 @@ export function App() {
           setError((err as Error).message);
           setGate("setup");
         }
-      } else setError((e as Error).message);
+      } else {
+        setError((e as Error).message);
+        setReloadNotice("Reload failed");
+      }
+    } finally {
+      setTablesLoading(false);
     }
   }, [resolveGate]);
+
+  useEffect(() => {
+    if (!reloadNotice) return;
+    const id = window.setTimeout(() => setReloadNotice(null), 3000);
+    return () => window.clearTimeout(id);
+  }, [reloadNotice]);
 
   useEffect(() => {
     void (async () => {
@@ -219,7 +235,14 @@ export function App() {
   }
 
   return (
-    <Shell route={route} tables={tables} connected={!error && gate === "ok"} onRefresh={() => void refresh()}>
+    <Shell
+      route={route}
+      tables={tables}
+      connected={!error && gate === "ok"}
+      tablesLoading={tablesLoading}
+      reloadNotice={reloadNotice}
+      onRefresh={() => void refresh()}
+    >
       {error && (
         <p role="alert" className="alert alert--error">
           {error}
