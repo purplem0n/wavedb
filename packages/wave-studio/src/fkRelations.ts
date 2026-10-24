@@ -48,11 +48,11 @@ export function relationsForCell(
     if (!fk.columns.includes(column)) continue;
     const vals = rowValues(row, columns, fk.columns);
     if (!vals) continue;
-    const base = whereEq(fk.ref_table, fk.ref_columns, vals);
+    const base = whereEq(fk.refTable, fk.refColumns, vals);
     out.push({
       cardinality: "many-to-one",
-      label: `${fk.ref_table}.${fk.ref_columns.join(",")}`,
-      targetTable: fk.ref_table,
+      label: `${fk.refTable}.${fk.refColumns.join(",")}`,
+      targetTable: fk.refTable,
       sql: `${base} LIMIT 1`,
     });
   }
@@ -64,9 +64,9 @@ export function relationsForCell(
     for (const child of schema) {
       if (child.name === table.name) continue;
       for (const fk of child.foreignKeys ?? []) {
-        if (fk.ref_table !== table.name) continue;
-        if (fk.ref_columns.length !== table.primaryKey.length) continue;
-        if (!fk.ref_columns.every((c, i) => c === table.primaryKey[i])) continue;
+        if (fk.refTable !== table.name) continue;
+        if (fk.refColumns.length !== table.primaryKey.length) continue;
+        if (!fk.refColumns.every((c, i) => c === table.primaryKey[i])) continue;
 
         const childCols = fk.columns;
         const parts = childCols.map((c, i) => `${quote(c)} = ${sqlLiteral(pkVals[i])}`);

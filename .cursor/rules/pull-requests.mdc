@@ -19,8 +19,8 @@ Follow **coderabbit-pr-loop.mdc** for the full checklist (outside-diff reviews, 
 Each loop wake on the open **`dev` → `main`** PR:
 
 1. **Triage (complete)** — Unresolved review threads, all pull inline comments, **and** CodeRabbit review summary bodies (`Outside diff range comments`). Inline-only triage is not enough.
-2. **Fix** — All still-valid findings on `dev` (including **Minor** / **Quick win**); test; **CHANGELOG**; commit; push; **`gh pr edit`** if needed.
-3. **Resolve** — Resolve GitHub threads yourself when fixed or already satisfied; do not wait for CodeRabbit to close them.
+2. **Fix + resolve (same pass)** — For each still-valid finding (including **Minor** / **Quick win**): implement or dismiss on `dev`, then **resolve the GitHub thread yourself immediately** — CodeRabbit rarely closes threads and open threads cause infinite loop cycles. Test; **CHANGELOG**; commit; push; **`gh pr edit`** if needed.
+3. **Verify resolved** — Before arming the watcher, paginate review threads; every addressed CodeRabbit item must be resolved on GitHub (see **coderabbit-pr-loop.mdc**).
 4. **Wait** — After a push you made, use **`./scripts/watch-pr-merge-loop.sh <N> --wait`** (foreground, long `block_until_ms`) or background + `notify_on_output` on `^AGENT_LOOP_WAKE_pr-merge`. Do not exit the turn on a capped manual poll while checks are pending.
 5. **Merge** — When merge-ready per **coderabbit-pr-loop.mdc** and the user allowed merge in the loop: **`gh pr merge --merge`** in the same pass. Do not stall after green CI + idle CodeRabbit + zero actionable items.
 

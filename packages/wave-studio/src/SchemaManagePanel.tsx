@@ -128,22 +128,48 @@ export function CreateTablePanel({ onDone }: { onDone: () => void }) {
 
   return (
     <div className="schema-manage schema-manage--create">
-      <h3 className="schema-manage-title">Create table</h3>
       {error && (
         <p role="alert" className="alert alert--error">
           {error}
         </p>
       )}
-      <div className="schema-manage-row">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="table_name" spellCheck={false} />
-        <input value={col} onChange={(e) => setCol(e.target.value)} placeholder="id column" spellCheck={false} />
-        <select value={type} onChange={(e) => setType(e.target.value as ColumnTypeName)}>
+      <label className="schema-field-label" htmlFor="create-table-name">
+        Table name
+      </label>
+      <input
+        id="create-table-name"
+        className="schema-field-input schema-field-input--full"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="e.g. orders"
+        spellCheck={false}
+        autoComplete="off"
+      />
+      <p className="schema-field-hint">Primary key column</p>
+      <div className="schema-manage-row schema-manage-row--labeled">
+        <label className="schema-field-label schema-field-label--inline" htmlFor="create-pk-name">
+          Name
+        </label>
+        <input
+          id="create-pk-name"
+          value={col}
+          onChange={(e) => setCol(e.target.value)}
+          placeholder="id"
+          spellCheck={false}
+          autoComplete="off"
+        />
+        <label className="schema-field-label schema-field-label--inline" htmlFor="create-pk-type">
+          Type
+        </label>
+        <select id="create-pk-type" value={type} onChange={(e) => setType(e.target.value as ColumnTypeName)}>
           {COLUMN_TYPES.map((t) => (
             <option key={t} value={t}>
               {t}
             </option>
           ))}
         </select>
+      </div>
+      <div className="schema-manage-actions">
         <button
           type="button"
           className="btn-primary"
@@ -163,7 +189,7 @@ export function CreateTablePanel({ onDone }: { onDone: () => void }) {
             })();
           }}
         >
-          Create
+          Create table
         </button>
       </div>
     </div>

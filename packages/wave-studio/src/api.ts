@@ -11,11 +11,12 @@ export interface IndexDef {
   columns: string[];
   unique: boolean;
 }
-/** Matches catalog JSON (`ref_table` / `ref_columns` are snake_case). */
+/** Matches engine `/api/tables` JSON (`camelCase`, same as `ForeignKeyDefJson` in wavedb). */
 export interface ForeignKeyDef {
+  name?: string;
   columns: string[];
-  ref_table: string;
-  ref_columns: string[];
+  refTable: string;
+  refColumns: string[];
 }
 export interface TableDef {
   id: number;
