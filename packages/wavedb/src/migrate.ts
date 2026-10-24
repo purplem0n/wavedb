@@ -358,5 +358,5 @@ export function diffSchema(
       });
     }
   }
-  return [...creates, ...adds, ...dropIdx, ...idx, ...addFks, ...dropFks, ...dropCols, ...dropTables];
+  return [...creates, ...adds, ...dropFks, ...dropIdx, ...idx, ...addFks, ...dropCols, ...dropTables];
 }

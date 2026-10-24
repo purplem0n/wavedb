@@ -88,7 +88,7 @@ check_status() {
           [[ "$name" == "$c" ]] && ci_pending=1
         done
         ;;
-      fail | failure | cancelled | timed_out)
+      fail | failure | cancelled | timed_out | skip | skipped)
         if [[ "$name" == "$REQUIRED_BOT" ]]; then bot_fail=1; fi
         for c in "${REQUIRED_CI[@]}"; do
           [[ "$name" == "$c" ]] && ci_fail=1
@@ -109,7 +109,11 @@ check_status() {
     echo "coderabbit_fail"
     return 0
   fi
-  if [[ "$ci_pending" -eq 1 ]] || [[ "$ci_pass" -lt ${#REQUIRED_CI[@]} ]]; then
+  if [[ "$ci_pending" -eq 0 ]] && [[ "$ci_pass" -lt ${#REQUIRED_CI[@]} ]]; then
+    echo "ci_fail"
+    return 0
+  fi
+  if [[ "$ci_pending" -eq 1 ]]; then
     echo "waiting_ci"
     return 0
   fi

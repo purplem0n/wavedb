@@ -55,7 +55,7 @@ export function tokenBeforeCursor(text: string, cursor: number): { prefix: strin
 function tableNamesInQuery(sql: string, beforeCursor?: number): Set<string> {
   const slice = beforeCursor === undefined ? sql : sql.slice(0, beforeCursor);
   const names = new Set<string>();
-  const re = /\b(?:FROM|JOIN|(?:INNER|LEFT|RIGHT|FULL|CROSS)\s+JOIN|INTO|UPDATE)\s+(?:"([^"]+)"|([\w]+))/gi;
+  const re = /\b(?:FROM|JOIN|(?:INNER|LEFT|RIGHT|FULL|CROSS)\s+JOIN|INTO|UPDATE)\s+(?:"((?:[^"]|"")*)"|([\w]+))/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(slice))) {
     names.add((m[1] ?? m[2])!.replace(/""/g, '"'));
@@ -65,7 +65,7 @@ function tableNamesInQuery(sql: string, beforeCursor?: number): Set<string> {
 
 function lastFromTable(sql: string, cursor: number): string | null {
   const head = sql.slice(0, cursor);
-  const re = /\bFROM\s+(?:"([^"]+)"|([\w]+))\s*(?:AS\s+([\w]+))?/gi;
+  const re = /\bFROM\s+(?:"((?:[^"]|"")*)"|([\w]+))\s*(?:AS\s+([\w]+))?/gi;
   let last: string | null = null;
   let m: RegExpExecArray | null;
   while ((m = re.exec(head))) {

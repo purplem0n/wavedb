@@ -339,7 +339,7 @@ pub enum AlterAction {
     AddForeignKey { fk: ForeignKeyDef },
     DropConstraint {
         name: String,
-        #[serde(alias = "ifExists")]
+        #[serde(rename = "ifExists", alias = "if_exists")]
         if_exists: bool,
     },
 }
