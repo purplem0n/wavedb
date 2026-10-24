@@ -10,3 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Studio **Logs & Metrics** page: live query log with read/write tags, durable read/write counters on disk (`.wave/query-metrics.json`), and JSONL log rotation under `.wave/query-log.jsonl`.
 - HTTP API: `GET /api/query-log`, `GET /api/query-metrics` (recorded on each `/api/run`).
+
+### Fixed
+
+- Engine stats: commits, conflicts, rollbacks, and fsync batch counters persist in database meta and survive process restart; Studio labels note which stats are session-only.
