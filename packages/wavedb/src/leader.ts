@@ -5,6 +5,9 @@ import { dirname, join } from "node:path";
 import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 
+/** Unique per process start; distinguishes PID reuse after restart on the same host. */
+const processInstanceId = randomUUID();
+
 export interface LeaderLease {
   holder: string;
   host: string;
@@ -13,6 +16,8 @@ export interface LeaderLease {
   generation: number;
   /** Process that holds the lease (used to reclaim after crash on same host). */
   pid?: number;
+  /** Random id assigned at process start (detects PID reuse). */
+  instanceId?: string;
 }
 
 export interface LeaderOptions {
@@ -30,6 +35,7 @@ export function leaderHostId(): string {
   return process.env.FLY_MACHINE_ID ?? hostname();
 }
 
+/** Returns whether `pid` refers to a live process (`kill(pid, 0)`; false on `ESRCH`). */
 function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -43,8 +49,9 @@ function isProcessAlive(pid: number): boolean {
 /** True when an unexpired lease is from a prior process on this host (e.g. SIGINT without release). */
 export function canReclaimStaleLeaderLease(cur: LeaderLease, host: string): boolean {
   if (cur.host !== host) return false;
-  if (cur.pid === undefined) return true;
-  return !isProcessAlive(cur.pid);
+  if (cur.pid === undefined || !Number.isInteger(cur.pid) || cur.pid <= 0) return false;
+  if (!isProcessAlive(cur.pid)) return true;
+  return cur.pid === process.pid && cur.instanceId !== processInstanceId;
 }
 
 function readLease(path: string): LeaderLease | null {
@@ -58,6 +65,7 @@ function readLease(path: string): LeaderLease | null {
       expiresAt: raw.expiresAt,
       generation: typeof raw.generation === "number" ? raw.generation : 0,
       pid: typeof raw.pid === "number" ? raw.pid : undefined,
+      instanceId: typeof raw.instanceId === "string" ? raw.instanceId : undefined,
     };
   } catch {
     return null;
@@ -110,6 +118,7 @@ export function acquireLeaderLease(opts: LeaderOptions): { ok: boolean; lease?: 
       expiresAt: now + ttl,
       generation: nextGen,
       pid: process.pid,
+      instanceId: processInstanceId,
     };
     if (writeLeaseCas(path, lease, cur)) {
       return { ok: true, lease };

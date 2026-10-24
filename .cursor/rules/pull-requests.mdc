@@ -1,11 +1,13 @@
 ---
-description: Use PRs for medium and large changes
+description: Use PRs for medium and large changes (dev → main only)
 alwaysApply: true
 ---
 
 # Pull requests
 
-- **Medium or large** changes (multi-file features, security fixes, API/auth behavior, engine changes, breaking changes) must use a feature branch and a **GitHub pull request** — not direct commits to `main`.
-- Default integration branch: **`dev`** → PR into **`main`** unless specified otherwise. After a release, CI rebases **`dev`** onto **`main`** when the changelog is reset; avoid long-lived divergence on `CHANGELOG.md`.
+- **Medium or large** changes (multi-file features, security fixes, API/auth behavior, engine changes, breaking changes) must go through a **GitHub pull request** — not direct commits to `main`.
+- **Do not** open feature branches for PRs. Commit on **`dev`**, push **`dev`**, and use **one PR: `dev` → `main`** (create it when needed; do not stack per-topic branches unless the user explicitly asks).
+- After a release, CI rebases **`dev`** onto **`main`** when the changelog is reset; avoid long-lived divergence on `CHANGELOG.md`.
 - PR description must include **Summary**, **Test plan** (commands run), and a pointer to **CHANGELOG** `[Unreleased]`.
-- Small one-line fixes may commit to `dev` without a PR only when explicitly requested; when in doubt, open a PR.
+- When you **push new commits to `dev`** while a **`dev` → `main`** PR is already open, **refresh that PR**: run `gh pr edit` (or equivalent) so **title and body** match the full diff on `dev` (all commits since `main`, not just the latest commit). Do this on every push that changes PR scope.
+- Small one-line fixes may commit to `dev` without a PR only when explicitly requested; when in doubt, open or update the `dev` → `main` PR.

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { acquireLeaderLease, renewLeaderLease, releaseLeaderLease } from "../src/leader.ts";
+import { dirname, join } from "node:path";
+import { acquireLeaderLease, leaderHostId, renewLeaderLease, releaseLeaderLease } from "../src/leader.ts";
 import { createWaveHandler } from "../src/server.ts";
 import { openTmp } from "./helpers.ts";
 
@@ -17,6 +17,57 @@ describe("leader lease", () => {
       releaseLeaderLease({ dataPath: dir }, a.lease!.holder);
       const b = acquireLeaderLease({ dataPath: dir, ttlMs: 5000 });
       expect(b.ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not reclaim legacy lease without pid until expiry", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wave-leader-"));
+    try {
+      const path = join(dir, ".wave", "leader.json");
+      mkdirSync(dirname(path), { recursive: true });
+      const host = leaderHostId();
+      writeFileSync(
+        path,
+        JSON.stringify(
+          {
+            holder: "legacy-holder",
+            host,
+            expiresAt: Date.now() + 60_000,
+            generation: 1,
+          },
+          null,
+          2,
+        ),
+      );
+      const b = acquireLeaderLease({ dataPath: dir, ttlMs: 60_000 });
+      expect(b.ok).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("reclaims unexpired lease when pid was reused on same host", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wave-leader-"));
+    try {
+      const a = acquireLeaderLease({ dataPath: dir, ttlMs: 60_000 });
+      expect(a.ok).toBe(true);
+      const path = join(dir, ".wave", "leader.json");
+      const stale = JSON.parse(readFileSync(path, "utf8")) as {
+        holder: string;
+        host: string;
+        expiresAt: number;
+        generation: number;
+        pid: number;
+        instanceId: string;
+      };
+      stale.pid = process.pid;
+      stale.instanceId = "prior-process-instance";
+      writeFileSync(path, JSON.stringify(stale, null, 2));
+      const b = acquireLeaderLease({ dataPath: dir, ttlMs: 60_000 });
+      expect(b.ok).toBe(true);
+      expect(b.lease?.instanceId).not.toBe(stale.instanceId);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
