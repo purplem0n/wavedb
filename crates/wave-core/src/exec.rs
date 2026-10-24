@@ -925,6 +925,32 @@ fn int_increment_delta(e: &BExpr, col: usize) -> Option<i64> {
     }
 }
 
+/// Apply queued commutative deltas in order. When `preview` is false, a failing WHERE returns `Conflict`.
+fn replay_commutative_ops(
+    table: &str,
+    row: &mut Vec<Value>,
+    ops: &[(HashMap<usize, i64>, Option<BExpr>)],
+    preview: bool,
+) -> Result<()> {
+    for (deltas, where_) in ops {
+        if let Some(w) = where_ {
+            if eval(w, row, &[])?.truthy() != Some(true) {
+                if preview {
+                    return Ok(());
+                }
+                return Err(Error::Conflict(format!(
+                    "conditional update predicate no longer satisfied on \"{table}\""
+                )));
+            }
+        }
+        for (p, d) in deltas {
+            let n = row[*p].as_i64().unwrap_or(0).saturating_add(*d);
+            row[*p] = Value::Int(n);
+        }
+    }
+    Ok(())
+}
+
 fn fk_values(t: &TableDef, row: &[Value], fk: &ForeignKeyDef) -> Result<Vec<Value>> {
     let mut out = Vec::with_capacity(fk.columns.len());
     for c in &fk.columns {
@@ -1118,20 +1144,8 @@ impl DbTxn {
                         )));
                     }
                     let mut row = cur.clone();
-                    for (deltas, where_) in ops {
-                        if let Some(w) = &where_ {
-                            if eval(w, &row, &[])?.truthy() != Some(true) {
-                                return Err(Error::Conflict(format!(
-                                    "conditional update predicate no longer satisfied on \"{}\"",
-                                    t.name
-                                )));
-                            }
-                        }
-                        for (p, d) in deltas {
-                            let n = row[p].as_i64().unwrap_or(0).saturating_add(d);
-                            row[p] = Value::Int(n);
-                        }
-                    }
+                    replay_commutative_ops(&t.name, &mut row, &ops, false)?;
+                    check_row_foreign_keys(txn, &t, &row)?;
                     apply_row_update(txn, &t, &cur, &row)?;
                     txn.mark_commutative_key(rk);
                 }
@@ -2137,15 +2151,7 @@ impl DbTxn {
                     .entry(rk.clone())
                     .or_insert_with(|| (t.clone(), old.clone(), Vec::new()));
                 entry.2.push((deltas, wb.clone()));
-                let mut sum: HashMap<usize, i64> = HashMap::new();
-                for (m, _) in &entry.2 {
-                    for (p, d) in m {
-                        *sum.entry(*p).or_insert(0) += d;
-                    }
-                }
-                for (p, total) in sum {
-                    new[p] = Value::Int(old[p].as_i64().unwrap_or(0).saturating_add(total));
-                }
+                replay_commutative_ops(&t.name, &mut new, &entry.2, true)?;
                 self.check_row(&t, &mut new)?;
                 updated.push(new);
             } else {
