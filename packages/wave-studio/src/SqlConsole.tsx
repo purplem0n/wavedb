@@ -410,8 +410,8 @@ export function SqlConsole({
               <>
                 <span className="run-meta-dot" />
                 <span>
-                  Engine query {engineMs.toFixed(2)}ms
-                  {uiLatencyMs !== null && <> • UI → engine {uiLatencyMs.toFixed(2)}ms</>} • {result.rows.length} row
+                  Query speed {engineMs.toFixed(2)}ms
+                  {uiLatencyMs !== null && <> • UI latency {uiLatencyMs.toFixed(2)}ms</>} • {result.rows.length} row
                   {result.rows.length === 1 ? "" : "s"} returned
                 </span>
               </>

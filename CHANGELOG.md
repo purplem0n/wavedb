@@ -17,6 +17,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Studio **Logs & Metrics** page: live query log with read/write tags, durable read/write counters on disk (`.wave/query-metrics.json`), and JSONL log rotation under `.wave/query-log.jsonl`.
 - HTTP API: `GET /api/query-log`, `GET /api/query-metrics` (recorded on each `/api/run`).
 
+### Changed
+
+- Studio query timing copy: **Query speed** and **UI latency** (replacing “Engine query” / “UI → engine”) in SQL Console and table browser.
+
 ### Fixed
 
 - Studio **Reload tables**: shows loading/disabled state, brief success or failure status, and still bumps table data when the catalog fetch completes.

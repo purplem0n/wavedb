@@ -326,13 +326,13 @@ export function TableView({
               {queryMs !== null && (
                 <>
                   {" "}
-                  • Engine query: <span className="accent">{queryMs.toFixed(2)}ms</span>
+                  • Query speed: <span className="accent">{queryMs.toFixed(2)}ms</span>
                 </>
               )}
               {uiLatencyMs !== null && (
                 <>
                   {" "}
-                  • UI → engine: <span className="accent">{uiLatencyMs.toFixed(2)}ms</span>
+                  • UI latency: <span className="accent">{uiLatencyMs.toFixed(2)}ms</span>
                 </>
               )}
             </>
