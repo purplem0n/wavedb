@@ -11,7 +11,7 @@ Linear project: **WaveDB** ([Linear](https://linear.app/xamantra/project/wavedb-
 
 - Pick or create a Linear issue in the **WaveDB** project before medium/large code changes.
 - Move the issue to **In Progress** when implementation begins.
-- Prefer Linear’s suggested branch name (`gitBranchName` on the issue) when working on a single issue; otherwise commit on **`dev`** per `pull-requests.mdc`.
+- Commit on **`dev`** for PR work, as required by `pull-requests.mdc`.
 
 ## Pull requests (`dev` → `main`)
 

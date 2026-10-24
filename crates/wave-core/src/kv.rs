@@ -42,13 +42,13 @@ const META_TS_KEY: &[u8] = b"last_ts";
 const META_STATS_KEY: &[u8] = b"cumulative_stats_v1";
 const META_AI_PREFIX: &[u8] = b"ai:";
 
-fn counters_from_meta(meta: &Keyspace) -> Counters {
+fn counters_from_meta(meta: &Keyspace) -> Result<Counters> {
     let counters = Counters::default();
-    let Ok(Some(bytes)) = meta.get(META_STATS_KEY) else {
-        return counters;
+    let Some(bytes) = meta.get(META_STATS_KEY)? else {
+        return Ok(counters);
     };
     if bytes.len() != 32 {
-        return counters;
+        return Ok(counters);
     }
     counters.commits.store(
         u64::from_be_bytes(bytes[0..8].try_into().unwrap()),
@@ -66,7 +66,7 @@ fn counters_from_meta(meta: &Keyspace) -> Counters {
         u64::from_be_bytes(bytes[24..32].try_into().unwrap()),
         Ordering::Relaxed,
     );
-    counters
+    Ok(counters)
 }
 
 fn ai_meta_key(table_id: u32) -> Vec<u8> {
@@ -194,7 +194,7 @@ impl Engine {
             Some(v) if v.len() == 8 => u64::from_be_bytes(v[..8].try_into().unwrap()),
             _ => 0,
         };
-        let counters = counters_from_meta(&meta);
+        let counters = counters_from_meta(&meta)?;
         Ok(Arc::new(Engine {
             db,
             data,
@@ -929,6 +929,7 @@ impl Txn {
             self.done = true;
             self.engine.unregister(self.start_ts);
             if !committed {
+                let _cs = self.engine.commit.lock();
                 let _ = self.engine.bump_rollback_count();
             }
         }
@@ -952,7 +953,8 @@ impl Txn {
                 f(self)?;
             }
             if self.writes.is_empty() {
-                eng.bump_commit_count()?;
+                eng.counters.commits.fetch_add(1, Ordering::Relaxed);
+                let _ = eng.persist_cumulative_stats();
                 return Ok(CommitInfo {
                     commit_ts: self.start_ts,
                     keys_written: 0,

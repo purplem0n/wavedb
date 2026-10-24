@@ -24,11 +24,11 @@ export function SchemaManagePanel({
   const [dropCol, setDropCol] = useState(table.columns[0]?.name ?? "");
   const [deleteConfirm, setDeleteConfirm] = useState("");
 
-  async function run(sql: string) {
+  async function run(build: () => string) {
     setBusy(true);
     setError(null);
     try {
-      await api.sql(sql);
+      await api.sql(build());
       onDone();
     } catch (e) {
       setError((e as Error).message);
@@ -64,7 +64,7 @@ export function SchemaManagePanel({
             type="button"
             className="btn-secondary"
             disabled={busy || !addName.trim()}
-            onClick={() => void run(addColumnSql(table.name, addName, addType, addNullable))}
+            onClick={() => void run(() => addColumnSql(table.name, addName, addType, addNullable))}
           >
             Add
           </button>
@@ -87,7 +87,7 @@ export function SchemaManagePanel({
               disabled={busy || !dropCol}
               onClick={() => {
                 if (!window.confirm(`Drop column "${dropCol}" from ${table.name}? This cannot be undone.`)) return;
-                void run(dropColumnSql(table.name, dropCol));
+                void run(() => dropColumnSql(table.name, dropCol));
               }}
             >
               Drop column
@@ -109,7 +109,7 @@ export function SchemaManagePanel({
             type="button"
             className="btn-secondary schema-manage-delete"
             disabled={busy || deleteConfirm !== table.name}
-            onClick={() => void run(dropTableSql(table.name))}
+            onClick={() => void run(() => dropTableSql(table.name))}
           >
             Delete table
           </button>

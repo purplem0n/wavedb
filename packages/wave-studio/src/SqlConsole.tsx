@@ -209,9 +209,13 @@ export function SqlConsole({
                           className="btn-icon"
                           title="Delete bookmark"
                           onClick={() => {
-                            deleteSavedQuery(q.id);
-                            setSaved(loadSavedQueries());
-                            if (activeSavedId === q.id) setActiveSavedId(null);
+                            try {
+                              deleteSavedQuery(q.id);
+                              setSaved(loadSavedQueries());
+                              if (activeSavedId === q.id) setActiveSavedId(null);
+                            } catch (e) {
+                              setError((e as Error).message);
+                            }
                           }}
                         >
                           <Icon name="delete" className="icon-sm" />
