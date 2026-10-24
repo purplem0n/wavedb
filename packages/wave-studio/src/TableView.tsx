@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, display, engineQueryDurationMs, quote, uiToEngineLatencyMs, type QueryResult, type TableDef } from "./api";
 import { tableWhereClause, validateTableFilter } from "./tableFilter";
+import { emptyRule, TableFilterUi } from "./TableFilterUi";
+import { uiFiltersToWhere } from "./uiFilter";
 import { DataGrid } from "./DataGrid";
 import { RefreshIcon } from "./icons";
 import { RowEditor } from "./RowEditor";
@@ -22,6 +24,8 @@ export function TableView({
 }) {
   const [filter, setFilter] = useState("");
   const [applied, setApplied] = useState("");
+  const [uiRulesList, setUiRulesList] = useState(() => [emptyRule(table.columns)]);
+  const [advancedSql, setAdvancedSql] = useState(false);
   const [sort, setSort] = useState<{ column: string; desc: boolean } | null>(null);
   const [page, setPage] = useState(0);
   const [total, setTotal] = useState<number | null>(null);
@@ -58,6 +62,8 @@ export function TableView({
   useEffect(() => {
     setFilter("");
     setApplied("");
+    setUiRulesList([emptyRule(table.columns)]);
+    setAdvancedSql(false);
     setSort(null);
     setPage(0);
   }, [table.name]);
@@ -119,43 +125,60 @@ export function TableView({
       </div>
 
       <form
-        className="filter-bar"
+        className="filter-bar filter-bar--stacked"
         onSubmit={(e) => {
           e.preventDefault();
           try {
-            validateTableFilter(filter);
+            const predicate = advancedSql ? validateTableFilter(filter) : uiFiltersToWhere(uiRulesList, table.columns);
             setPage(0);
-            setApplied(filter);
+            setApplied(predicate);
             setError(null);
           } catch (err) {
             setError((err as Error).message);
           }
         }}
       >
-        <label htmlFor="where-input">Filter (SQL WHERE):</label>
-        <div className="filter-input-wrap">
-          <input
-            id="where-input"
-            className="filter-input"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder={table.columns[0] ? `id > 10 AND ${table.columns[1]?.name ?? "status"} = 'shipped'...` : ""}
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <span className="filter-sql-tag">SQL</span>
-        </div>
+        {!advancedSql ? (
+          <TableFilterUi columns={table.columns} rules={uiRulesList} onChange={setUiRulesList} />
+        ) : (
+          <>
+            <label htmlFor="where-input">Advanced SQL (WHERE predicate only)</label>
+            <div className="filter-input-wrap">
+              <input
+                id="where-input"
+                className="filter-input"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder={table.columns[0] ? `id > 10 AND ${table.columns[1]?.name ?? "status"} = 'shipped'...` : ""}
+                spellCheck={false}
+                autoComplete="off"
+              />
+              <span className="filter-sql-tag">SQL</span>
+            </div>
+          </>
+        )}
         <div className="filter-actions">
           <button type="submit" className="btn-primary">
-            Apply
+            Apply filters
           </button>
-          {applied && (
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => {
+              setAdvancedSql((a) => !a);
+              setError(null);
+            }}
+          >
+            {advancedSql ? "Simple filters" : "Advanced SQL"}
+          </button>
+          {(applied || uiRulesList.some((r) => r.value)) && (
             <button
               type="button"
               className="btn-ghost"
               onClick={() => {
                 setFilter("");
                 setApplied("");
+                setUiRulesList([emptyRule(table.columns)]);
                 setPage(0);
               }}
             >

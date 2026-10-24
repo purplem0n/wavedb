@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Table browser **UI filters**: column/operator/value builder (equals, contains, ranges, null checks) with optional advanced SQL predicate mode.
 - Table browser **row editor**: double-click a cell or use the row edit control for inline popout and full-row edit (requires primary key; engine validation on save).
 - SQL Console **syntax highlighting** for keywords, strings, numbers, and comments (dark-theme tokens).
 - SQL Console **schema autocomplete**: table/column and keyword suggestions from live schema (updates when tables reload).
