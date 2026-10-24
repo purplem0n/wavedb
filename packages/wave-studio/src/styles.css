@@ -1228,7 +1228,82 @@ code,
   user-select: none;
 }
 
+.sql-complete {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 100%;
+  margin: 0 0 4px;
+  padding: 4px 0;
+  list-style: none;
+  max-height: 200px;
+  overflow: auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--outline-variant);
+  background: var(--surface-container-high);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 20;
+}
+
+.sql-complete-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  color: var(--on-surface);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sql-complete-item.active,
+.sql-complete-item:hover {
+  background: var(--surface-container-highest);
+}
+
+.sql-complete-kind {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.sql-complete-kind--keyword {
+  background: color-mix(in srgb, var(--tertiary) 25%, transparent);
+  color: var(--tertiary);
+}
+.sql-complete-kind--table {
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
+  color: var(--primary);
+}
+.sql-complete-kind--column {
+  background: var(--surface-container);
+  color: var(--on-surface-variant);
+}
+
+.sql-complete-label {
+  font-family: var(--font-mono);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sql-complete-detail {
+  font-size: 11px;
+  color: var(--on-surface-variant);
+  flex-shrink: 0;
+}
+
+.sql-editor-wrap-inner,
 .sql-editor-wrap {
+  position: relative;
   flex: 1;
   padding: var(--space-sm);
   background: var(--surface-container-lowest);

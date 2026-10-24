@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- SQL Console **schema autocomplete**: table/column and keyword suggestions from live schema (updates when tables reload).
 - SQL Console **saved queries**: name/description bookmarks with list, load, update, and delete (stored per API prefix in browser localStorage).
 - Studio **Logs & Metrics** page: live query log with read/write tags, durable read/write counters on disk (`.wave/query-metrics.json`), and JSONL log rotation under `.wave/query-log.jsonl`.
 - HTTP API: `GET /api/query-log`, `GET /api/query-metrics` (recorded on each `/api/run`).

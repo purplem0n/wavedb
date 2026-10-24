@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, uiToEngineLatencyMs, type QueryResult } from "./api";
+import { api, uiToEngineLatencyMs, type QueryResult, type TableDef } from "./api";
+import { applyCompletion, sqlCompletions, type CompletionItem } from "./sqlComplete";
 import { DataGrid } from "./DataGrid";
 import { Icon } from "./icons";
 import { waveEngineVersionTag } from "./version";
@@ -16,7 +17,15 @@ function lineNumbers(text: string): number {
   return Math.max(1, text.split("\n").length);
 }
 
-export function SqlConsole({ onChanged, initial }: { onChanged: () => void; initial?: string }) {
+export function SqlConsole({
+  onChanged,
+  initial,
+  tables,
+}: {
+  onChanged: () => void;
+  initial?: string;
+  tables: TableDef[];
+}) {
   const [text, setText] = useState(initial ?? "SELECT 1 AS hello;");
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +50,28 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
   const historyRef = useRef<HTMLDivElement>(null);
   const savedRef = useRef<HTMLDivElement>(null);
   const saveRef = useRef<HTMLDivElement>(null);
+  const [completions, setCompletions] = useState<CompletionItem[]>([]);
+  const [completionIdx, setCompletionIdx] = useState(0);
+  const [completionOpen, setCompletionOpen] = useState(false);
+
+  function refreshCompletions(nextText: string, cursor: number) {
+    const items = sqlCompletions(nextText, cursor, tables);
+    setCompletions(items);
+    setCompletionIdx(0);
+    setCompletionOpen(items.length > 0);
+  }
+
+  function pickCompletion(item: CompletionItem) {
+    const el = ref.current;
+    if (!el) return;
+    const r = applyCompletion(text, el.selectionStart ?? text.length, item);
+    setText(r.text);
+    setCompletionOpen(false);
+    requestAnimationFrame(() => {
+      el.focus();
+      el.setSelectionRange(r.cursor, r.cursor);
+    });
+  }
 
   useEffect(() => {
     if (initial !== undefined) setText(initial);
@@ -277,6 +308,28 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
             <label htmlFor="sql-input" className="sr-only">
               SQL statement
             </label>
+            {completionOpen && completions.length > 0 && (
+              <ul className="sql-complete" role="listbox" aria-label="SQL suggestions">
+                {completions.map((c, i) => (
+                  <li key={`${c.label}-${i}`}>
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={i === completionIdx}
+                      className={`sql-complete-item${i === completionIdx ? " active" : ""}`}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        pickCompletion(c);
+                      }}
+                    >
+                      <span className={`sql-complete-kind sql-complete-kind--${c.kind}`}>{c.kind}</span>
+                      <span className="sql-complete-label">{c.label}</span>
+                      {c.detail && <span className="sql-complete-detail">{c.detail}</span>}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <textarea
               id="sql-input"
               ref={ref}
@@ -284,8 +337,40 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
               value={text}
               spellCheck={false}
               rows={Math.max(5, lines)}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value);
+                refreshCompletions(e.target.value, e.target.selectionStart ?? e.target.value.length);
+              }}
+              onClick={(e) => refreshCompletions(e.currentTarget.value, e.currentTarget.selectionStart ?? 0)}
+              onKeyUp={(e) => refreshCompletions(e.currentTarget.value, e.currentTarget.selectionStart ?? 0)}
               onKeyDown={(e) => {
+                if (completionOpen && completions.length > 0) {
+                  if (e.key === "Tab" || (e.key === "Enter" && e.shiftKey === false && !(e.metaKey || e.ctrlKey))) {
+                    e.preventDefault();
+                    pickCompletion(completions[completionIdx]!);
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setCompletionOpen(false);
+                    return;
+                  }
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setCompletionIdx((i) => (i + 1) % completions.length);
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setCompletionIdx((i) => (i - 1 + completions.length) % completions.length);
+                    return;
+                  }
+                }
+                if ((e.metaKey || e.ctrlKey) && e.key === " ") {
+                  e.preventDefault();
+                  refreshCompletions(e.currentTarget.value, e.currentTarget.selectionStart ?? 0);
+                  return;
+                }
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                   e.preventDefault();
                   void run();
@@ -330,7 +415,9 @@ export function SqlConsole({ onChanged, initial }: { onChanged: () => void; init
             For writes: <strong style={{ color: "var(--on-surface)" }}>&quot;1 row affected • lastInsertId: …&quot;</strong>
           </span>
         </div>
-        <span style={{ fontSize: "11px", opacity: 0.7 }}>Read-committed snapshot isolation</span>
+          <span style={{ fontSize: "11px", opacity: 0.7 }}>
+            Tab to accept suggestion · ⌃Space to open · schema from live tables
+          </span>
       </div>
 
       {error && (
