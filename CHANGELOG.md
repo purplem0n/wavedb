@@ -6,23 +6,3 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
-
-- GitHub Release notes are taken from `[Unreleased]` in this file when native packages ship; CI clears `[Unreleased]` on `main` (only for the latest release when `main` is at that tag) and rebases `dev` onto `main` so both branches stay aligned.
-- One-time web setup credential: `.wave/setup.token` on first boot (or `WAVE_SETUP_TOKEN`) required for `POST /api/auth/setup` when the admin is not pre-provisioned via `WAVE_ADMIN_PASSWORD`.
-
-### Fixed
-
-- Session cookies include `Secure` on HTTPS Fetch requests and direct TLS Node connections.
-- Wave HTTP handler fails closed when `auth` is enabled without a resolvable database `dataPath`.
-- CLI remote sessions are scoped to the full server URL; a cached token is not reused for a different host or path.
-- Schema rebuild preserves rows for table names that contain dots.
-- Engine: guarded integer updates (`col ± n`) re-check their `WHERE` clause at commit (including multiple updates in one transaction), validate foreign keys before write, and conflict if another transaction changed the row first; `RETURNING` previews match commit replay order; primary-key increments no longer overwrite other rows; self-referencing views return an error instead of looping; `BEGIN READ ONLY` is rejected; `LIKE` patterns without `%` stay linear-time.
-- Wave Studio first-time setup sends the one-time setup token with the password.
-- Hono marketplace example: order status changes run in one transaction with optimistic status checks; order lines reject null entries; `bun run studio` uses the same DB path as the app.
-
-### Breaking
-
-- `POST /api/auth/setup` requires `setupToken` in the JSON body unless the administrator was created via `WAVE_ADMIN_PASSWORD` / `bootstrapPassword` before setup.
-- `createWaveHandler` with `auth: true` and no resolvable `dataPath` throws at construction time.
-- Legacy CLI session cache files without a matching stored `url` are ignored.
