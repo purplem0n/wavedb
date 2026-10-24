@@ -18,4 +18,10 @@ describe("uiFiltersToWhere", () => {
     );
     expect(w).toBe('"id" = 5 AND "name" LIKE \'%acme%\' ESCAPE \'\\\'');
   });
+
+  test("between rejects empty numeric bounds", () => {
+    expect(() =>
+      uiFiltersToWhere([{ column: "id", op: "between", value: "5", value2: "" }], columns),
+    ).toThrow(/value required/);
+  });
 });

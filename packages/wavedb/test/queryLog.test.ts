@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { QueryLog, classifySql } from "../src/queryLog.ts";
+import { QueryLog, classifySql, classifyStmt } from "../src/queryLog.ts";
 
 describe("classifySql", () => {
   test("read vs write keywords", () => {
@@ -11,6 +11,14 @@ describe("classifySql", () => {
     expect(classifySql("INSERT INTO t VALUES (1)")).toBe("write");
     expect(classifySql("UPDATE t SET n = 1")).toBe("write");
     expect(classifySql("DELETE FROM t")).toBe("write");
+  });
+});
+
+describe("classifyStmt", () => {
+  test("typed IR kinds", () => {
+    expect(classifyStmt({ kind: "select" })).toBe("read");
+    expect(classifyStmt({ kind: "insert" })).toBe("write");
+    expect(classifyStmt({ kind: "update" })).toBe("write");
   });
 });
 
@@ -32,5 +40,15 @@ describe("QueryLog", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("recent(since) returns earliest new entries in order", () => {
+    const log = new QueryLog({ memoryLimit: 500 });
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      ids.push(log.record({ sql: `SELECT ${i}`, ok: true }).id);
+    }
+    const batch = log.recent(2, ids[1]);
+    expect(batch.map((e) => e.sql)).toEqual(["SELECT 2", "SELECT 3"]);
   });
 });

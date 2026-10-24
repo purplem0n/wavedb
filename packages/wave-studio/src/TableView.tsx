@@ -41,11 +41,17 @@ export function TableView({
 
   const canEdit = table.primaryKey.length > 0;
 
-  async function persistChanges(rowIndex: number, changes: Record<string, unknown>) {
+  async function persistChanges(rowIndex: number, buildChanges: () => Record<string, unknown>) {
     if (!result) return;
     setEditBusy(true);
     setEditError(null);
     try {
+      const changes = buildChanges();
+      if (Object.keys(changes).length === 0) {
+        setCellEdit(null);
+        setRowEdit(null);
+        return;
+      }
       const sql = buildUpdateSql(table, result.columns, result.rows[rowIndex]!, changes);
       await api.sql(sql);
       setCellEdit(null);
@@ -247,12 +253,14 @@ export function TableView({
                 if (e.key === "Escape") setCellEdit(null);
                 if (e.key === "Enter") {
                   e.preventDefault();
-                  void (async () => {
+                  void persistChanges(cellEdit.row, () => {
                     const def = table.columns.find((c) => c.name === cellEdit.col);
-                    if (!def) return;
-                    const parsed = parseCellInput(cellEdit.value, def.type, def.nullable);
-                    await persistChanges(cellEdit.row, { [cellEdit.col]: parsed });
-                  })();
+                    if (!def) throw new Error("Unknown column");
+                    const old = result.rows[cellEdit.row]?.[result.columns.indexOf(cellEdit.col)];
+                    const oldDisp = old === null || old === undefined ? "" : display(old, def.type);
+                    if (cellEdit.value === oldDisp) return {};
+                    return { [cellEdit.col]: parseCellInput(cellEdit.value, def.type, def.nullable) };
+                  });
                 }
               }}
             />
@@ -270,12 +278,14 @@ export function TableView({
                 className="btn-run"
                 disabled={editBusy}
                 onClick={() => {
-                  void (async () => {
+                  void persistChanges(cellEdit.row, () => {
                     const def = table.columns.find((c) => c.name === cellEdit.col);
-                    if (!def) return;
-                    const parsed = parseCellInput(cellEdit.value, def.type, def.nullable);
-                    await persistChanges(cellEdit.row, { [cellEdit.col]: parsed });
-                  })();
+                    if (!def) throw new Error("Unknown column");
+                    const old = result.rows[cellEdit.row]?.[result.columns.indexOf(cellEdit.col)];
+                    const oldDisp = old === null || old === undefined ? "" : display(old, def.type);
+                    if (cellEdit.value === oldDisp) return {};
+                    return { [cellEdit.col]: parseCellInput(cellEdit.value, def.type, def.nullable) };
+                  });
                 }}
               >
                 {editBusy ? "Saving…" : "Save"}
@@ -294,7 +304,7 @@ export function TableView({
             onChange={(col, value) => setRowEdit({ ...rowEdit, draft: { ...rowEdit.draft, [col]: value } })}
             onClose={() => setRowEdit(null)}
             onSave={() => {
-              void (async () => {
+              void persistChanges(rowEdit.row, () => {
                 const changes: Record<string, unknown> = {};
                 const pk = new Set(table.primaryKey);
                 for (const col of result.columns) {
@@ -307,12 +317,8 @@ export function TableView({
                   if (rowEdit.draft[col] === oldDisp) continue;
                   changes[col] = parseCellInput(rowEdit.draft[col] ?? "", def.type, def.nullable);
                 }
-                if (Object.keys(changes).length === 0) {
-                  setRowEdit(null);
-                  return;
-                }
-                await persistChanges(rowEdit.row, changes);
-              })();
+                return changes;
+              });
             }}
           />
         )}

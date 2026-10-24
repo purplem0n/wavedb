@@ -81,6 +81,27 @@ export function classifySql(sql: string): QueryKind {
   return "other";
 }
 
+/** Classify typed IR statements from `/api/run` (when `sql` is omitted). */
+export function classifyStmt(stmt: Record<string, unknown>): QueryKind {
+  const kind = stmt.kind;
+  if (typeof kind !== "string") return "other";
+  const k = kind.toLowerCase();
+  if (k === "select" || k === "explain") return "read";
+  if (
+    k === "insert" ||
+    k === "update" ||
+    k === "delete" ||
+    k === "createtable" ||
+    k === "droptable" ||
+    k === "createindex" ||
+    k === "dropindex" ||
+    k === "altertable"
+  ) {
+    return "write";
+  }
+  return "other";
+}
+
 function readMetrics(path: string): QueryMetrics {
   if (!existsSync(path)) return { totalReads: 0, totalWrites: 0, totalOther: 0 };
   try {
@@ -153,12 +174,14 @@ export class QueryLog {
   }
 
   recent(limit = 100, sinceId?: string): QueryLogEntry[] {
-    let list = this.entries;
+    const cap = Math.max(1, Math.min(limit, this.memoryLimit));
     if (sinceId) {
-      const idx = list.findIndex((e) => e.id === sinceId);
-      list = idx >= 0 ? list.slice(idx + 1) : list;
+      const idx = this.entries.findIndex((e) => e.id === sinceId);
+      if (idx >= 0) {
+        return this.entries.slice(idx + 1, idx + 1 + cap);
+      }
     }
-    return list.slice(-Math.max(1, Math.min(limit, this.memoryLimit)));
+    return this.entries.slice(-cap);
   }
 
   subscribe(fn: (entry: QueryLogEntry) => void): () => void {
@@ -168,12 +191,13 @@ export class QueryLog {
 
   record(input: {
     sql: string;
+    kind?: QueryKind;
     durationMs?: number;
     rowsAffected?: number;
     ok: boolean;
     error?: string;
   }): QueryLogEntry {
-    const kind = classifySql(input.sql);
+    const kind = input.kind ?? classifySql(input.sql);
     const entry: QueryLogEntry = {
       id: randomUUID(),
       at: Date.now(),
@@ -194,7 +218,13 @@ export class QueryLog {
       this.entries.splice(0, this.entries.length - this.memoryLimit);
     }
 
-    if (this.metricsFile) writeMetricsAtomic(this.metricsFile, this.metrics);
+    if (this.metricsFile) {
+      try {
+        writeMetricsAtomic(this.metricsFile, this.metrics);
+      } catch {
+        /* metrics must not break queries */
+      }
+    }
     if (this.logFile) {
       try {
         rotateLogIfNeeded(this.logFile, this.maxLogBytes);

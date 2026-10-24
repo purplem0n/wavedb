@@ -35,7 +35,11 @@ export function upsertSavedQuery(input: { id?: string; name: string; description
   if (!name) throw new Error("Name is required");
   const list = loadSavedQueries();
   const now = Date.now();
-  const id = input.id ?? crypto.randomUUID();
+  const id =
+    input.id ??
+    (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
   const next: SavedQuery = {
     id,
     name,

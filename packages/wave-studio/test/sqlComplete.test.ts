@@ -37,4 +37,12 @@ describe("sqlCompletions", () => {
     const r = applyCompletion(sql, sql.length, t);
     expect(r.text).toContain('"users"');
   });
+
+  test("applyCompletion keeps table qualifier for columns", () => {
+    const sql = "SELECT * FROM users u WHERE users.em";
+    const items = sqlCompletions(sql, sql.length, tables);
+    const col = items.find((i) => i.label === "email")!;
+    const r = applyCompletion(sql, sql.length, col);
+    expect(r.text).toContain("users.email");
+  });
 });

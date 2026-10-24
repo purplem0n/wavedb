@@ -12,7 +12,7 @@ import type { TLSSocket } from "node:tls";
 import { acquireLeaderLease, startLeaderRenewal, type LeaderLease } from "./leader.ts";
 import { initWaveAuth, normalizePrefix, type WaveAuth } from "./auth.ts";
 import { wavedbPackageVersion } from "./pkgVersion.ts";
-import { QueryLog } from "./queryLog.ts";
+import { QueryLog, classifyStmt } from "./queryLog.ts";
 
 export interface HandlerOptions {
   /** Path to database directory (leader lease + superuser auth). */
@@ -362,7 +362,8 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
         const r =
           sql !== undefined ? await target.runSql(sql, body.params ?? []) : await target.run(body.stmt);
         queryLog.record({
-          sql: sql ?? "(typed stmt)",
+          sql: sql ?? JSON.stringify(body.stmt).slice(0, 500),
+          kind: sql === undefined ? classifyStmt(body.stmt as Record<string, unknown>) : undefined,
           durationMs: r.durationMs,
           rowsAffected: r.rowsAffected,
           ok: true,
@@ -371,7 +372,8 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       } catch (e) {
         const err = mapNativeError(e);
         queryLog.record({
-          sql: sql ?? "(typed stmt)",
+          sql: sql ?? JSON.stringify(body.stmt).slice(0, 500),
+          kind: sql === undefined ? classifyStmt(body.stmt as Record<string, unknown>) : undefined,
           ok: false,
           error: err.message,
         });

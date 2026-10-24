@@ -31,11 +31,13 @@ export function operatorsForType(type: string): UiFilterOp[] {
 function parseValue(raw: string, col: ColumnDef): unknown {
   const s = raw.trim();
   if (/int/i.test(col.type)) {
+    if (!s) throw new Error(`${col.name}: value required`);
     const n = Number(s);
     if (!Number.isInteger(n)) throw new Error(`${col.name}: expected integer`);
     return n;
   }
   if (/real|float|double|numeric|decimal/i.test(col.type)) {
+    if (!s) throw new Error(`${col.name}: value required`);
     const n = Number(s);
     if (!Number.isFinite(n)) throw new Error(`${col.name}: expected number`);
     return n;

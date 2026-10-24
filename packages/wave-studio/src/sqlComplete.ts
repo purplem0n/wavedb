@@ -86,7 +86,7 @@ export function sqlCompletions(text: string, cursor: number, tables: TableDef[],
           if (out.length >= limit) break;
           out.push({
             label: c.name,
-            insert: c.name,
+            insert: `${prefix.slice(0, dot + 1)}${c.name}`,
             detail: c.type,
             kind: "column",
           });

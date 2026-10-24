@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, uiToEngineLatencyMs, type QueryResult, type TableDef } from "./api";
-import { applyCompletion, sqlCompletions, type CompletionItem } from "./sqlComplete";
+import { applyCompletion, sqlCompletions, tokenBeforeCursor, type CompletionItem } from "./sqlComplete";
 import { highlightSql } from "./sqlHighlight";
 import { DataGrid } from "./DataGrid";
 import { Icon } from "./icons";
@@ -57,7 +57,11 @@ export function SqlConsole({
   const [completionIdx, setCompletionIdx] = useState(0);
   const [completionOpen, setCompletionOpen] = useState(false);
 
-  function refreshCompletions(nextText: string, cursor: number) {
+  function refreshCompletions(nextText: string, cursor: number, force = false) {
+    if (!force && tokenBeforeCursor(nextText, cursor).prefix === "") {
+      setCompletionOpen(false);
+      return;
+    }
     const items = sqlCompletions(nextText, cursor, tables);
     setCompletions(items);
     setCompletionIdx(0);
@@ -201,7 +205,15 @@ export function SqlConsole({
                         {q.description && <span className="saved-desc">{q.description}</span>}
                       </button>
                       <div className="saved-row-actions">
-                        <button type="button" className="btn-icon" title="Edit bookmark" onClick={() => openSaveDialog(q)}>
+                        <button
+                          type="button"
+                          className="btn-icon"
+                          title="Edit bookmark"
+                          onClick={() => {
+                            setText(q.sql);
+                            openSaveDialog(q);
+                          }}
+                        >
                           <Icon name="edit" className="icon-sm" />
                         </button>
                         <button
@@ -362,8 +374,15 @@ export function SqlConsole({
                 setText(e.target.value);
                 refreshCompletions(e.target.value, e.target.selectionStart ?? e.target.value.length);
               }}
-              onClick={(e) => refreshCompletions(e.currentTarget.value, e.currentTarget.selectionStart ?? 0)}
-              onKeyUp={(e) => refreshCompletions(e.currentTarget.value, e.currentTarget.selectionStart ?? 0)}
+              onClick={() => setCompletionOpen(false)}
+              onKeyUp={(e) => {
+                if (
+                  ["ArrowUp", "ArrowDown", "Escape", "Tab", "Enter", "Shift", "Control", "Meta", "Alt"].includes(e.key)
+                ) {
+                  return;
+                }
+                refreshCompletions(e.currentTarget.value, e.currentTarget.selectionStart ?? 0);
+              }}
               onKeyDown={(e) => {
                 if (completionOpen && completions.length > 0) {
                   if (e.key === "Tab" || (e.key === "Enter" && e.shiftKey === false && !(e.metaKey || e.ctrlKey))) {
@@ -389,7 +408,7 @@ export function SqlConsole({
                 }
                 if ((e.metaKey || e.ctrlKey) && e.key === " ") {
                   e.preventDefault();
-                  refreshCompletions(e.currentTarget.value, e.currentTarget.selectionStart ?? 0);
+                  refreshCompletions(e.currentTarget.value, e.currentTarget.selectionStart ?? 0, true);
                   return;
                 }
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
