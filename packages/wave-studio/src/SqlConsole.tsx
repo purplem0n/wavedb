@@ -376,6 +376,7 @@ export function SqlConsole({
               }}
               onClick={() => setCompletionOpen(false)}
               onKeyUp={(e) => {
+                if (e.ctrlKey || e.metaKey) return;
                 if (
                   ["ArrowUp", "ArrowDown", "Escape", "Tab", "Enter", "Shift", "Control", "Meta", "Alt"].includes(e.key)
                 ) {

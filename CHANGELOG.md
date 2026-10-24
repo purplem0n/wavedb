@@ -25,7 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Studio **Reload tables**: shows loading/disabled state, brief success or failure status, and still bumps table data when the catalog fetch completes.
 - Engine stats: commits, conflicts, rollbacks, and fsync batch counters persist in database meta and survive process restart; Studio labels note which stats are session-only.
-- Query log: incremental `since` polling returns the earliest new entries (not the tail); metrics file write failures no longer fail successful queries; typed `/api/run` statements count toward read/write metrics.
+- Query log: incremental `since` polling returns the earliest new entries (not the tail); metrics file write failures no longer fail successful queries; typed `/api/run` statements count toward read/write metrics; logging no longer throws when `stmt` is missing.
 - SQL Console: bookmark edit loads saved SQL; completion list no longer fights arrow/Escape/Enter; qualified column completions preserve the table prefix; saved-query IDs work without `crypto.randomUUID`.
 - Table browser: cell save skips unchanged blob display values; parse errors surface in the edit UI.
 - UI filters: empty numeric `between` bounds are rejected instead of coercing to zero.

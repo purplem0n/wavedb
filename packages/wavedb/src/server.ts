@@ -358,12 +358,19 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
     if (path === "/api/run") {
       const target = body.tx ? touch(String(body.tx)).tx.exec : db.backend.exec;
       const sql = body.sql !== undefined ? String(body.sql) : undefined;
+      const stmt = body.stmt;
+      const logSql =
+        sql ?? String(JSON.stringify(stmt ?? null)).slice(0, 500);
+      const logKind =
+        sql === undefined && typeof stmt === "object" && stmt !== null
+          ? classifyStmt(stmt as Record<string, unknown>)
+          : undefined;
       try {
         const r =
           sql !== undefined ? await target.runSql(sql, body.params ?? []) : await target.run(body.stmt);
         queryLog.record({
-          sql: sql ?? JSON.stringify(body.stmt).slice(0, 500),
-          kind: sql === undefined ? classifyStmt(body.stmt as Record<string, unknown>) : undefined,
+          sql: logSql,
+          kind: logKind,
           durationMs: r.durationMs,
           rowsAffected: r.rowsAffected,
           ok: true,
@@ -372,8 +379,8 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       } catch (e) {
         const err = mapNativeError(e);
         queryLog.record({
-          sql: sql ?? JSON.stringify(body.stmt).slice(0, 500),
-          kind: sql === undefined ? classifyStmt(body.stmt as Record<string, unknown>) : undefined,
+          sql: logSql,
+          kind: logKind,
           ok: false,
           error: err.message,
         });
