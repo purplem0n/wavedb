@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createWaveHandler } from "../src/server.ts";
 import { QueryLog, classifySql, classifyStmt } from "../src/queryLog.ts";
+import { wrapExecutorWithQueryLog } from "../src/queryLogWrap.ts";
+import type { Executor } from "../src/query.ts";
 import { openTmp } from "./helpers.ts";
 
 describe("classifySql", () => {
@@ -82,6 +84,29 @@ describe("QueryLog", () => {
     expect(recent.filter((e) => e.sql.includes("SELECT 2")).length).toBe(1);
     await handler.close();
     await db.close();
+  });
+
+  test("typed IR run logs readable SQL", async () => {
+    const log = new QueryLog();
+    const inner: Executor = {
+      async run() {
+        return { columns: [], rows: [], rowsAffected: 0, durationMs: 0.5 };
+      },
+      async runSql() {
+        return { columns: [], rows: [], rowsAffected: 0, durationMs: 0.5 };
+      },
+    };
+    const exec = wrapExecutorWithQueryLog(inner, log);
+    await exec.run({
+      kind: "select",
+      columns: [{ t: "star" }],
+      from: { name: "products" },
+      limit: 50,
+      offset: 0,
+    });
+    const entry = log.recent(1)[0]!;
+    expect(entry.sql).toBe('SELECT * FROM "products" LIMIT 50 OFFSET 0');
+    expect(entry.sql).not.toContain('"kind"');
   });
 
   test("recent(since) returns earliest new entries in order", () => {

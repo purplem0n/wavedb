@@ -6,3 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Wave Studio **Logs** now show human-readable SQL for typed query-builder / IR executions instead of raw JSON AST blobs.
+
