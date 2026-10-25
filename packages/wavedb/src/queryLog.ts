@@ -319,9 +319,8 @@ export class QueryLog {
           if (this.appendsSinceCompact >= this.compactEvery) {
             this.flush();
             writeLogAtomic(this.logFile, this.entries);
+            this.pendingLogLines = [];
             this.appendsSinceCompact = 0;
-            this.metricsDirty = false;
-            if (this.metricsFile) writeMetricsAtomic(this.metricsFile, this.metrics);
           }
         }
       } catch {

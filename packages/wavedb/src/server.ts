@@ -10,6 +10,7 @@ import type { Database, TxBackend } from "./db.ts";
 import { defaultWavePath } from "./db.ts";
 import type { TLSSocket } from "node:tls";
 import { acquireLeaderLease, startLeaderRenewal, type LeaderLease } from "./leader.ts";
+import { QueryLog } from "./queryLog.ts";
 import { initWaveAuth, normalizePrefix, type WaveAuth } from "./auth.ts";
 import { wavedbPackageVersion } from "./pkgVersion.ts";
 
@@ -233,7 +234,8 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       : undefined;
 
   const txs = new Map<string, { tx: TxBackend; timer: ReturnType<typeof setTimeout> }>();
-  const queryLog = db.queryLog ?? db.enableQueryLog({ dataPath: resolvedDataPath });
+  const queryLog =
+    db.queryLog ?? (db.queryLogDisabled ? new QueryLog() : db.enableQueryLog({ dataPath: resolvedDataPath }));
   let stopLeader: (() => void) | undefined;
   let leader: LeaderLease | undefined;
   let active = true;

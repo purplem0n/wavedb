@@ -419,6 +419,8 @@ export interface PushOptions {
 export class Database<S extends SchemaMap = SchemaMap> extends Querier<S> {
   /** Local directory when opened via `wave()` (used by `waveHost` for auth / leader). */
   readonly dataPath?: string;
+  /** Set when opened with `wave({ queryLog: false })`; handlers must not re-enable logging. */
+  readonly queryLogDisabled: boolean;
   private _backend: Backend;
   private _queryLog?: QueryLog;
   private closed = false;
@@ -426,12 +428,13 @@ export class Database<S extends SchemaMap = SchemaMap> extends Querier<S> {
   constructor(
     backend: Backend,
     schema: S,
-    meta?: { dataPath?: string; queryLog?: QueryLog },
+    meta?: { dataPath?: string; queryLog?: QueryLog; queryLogDisabled?: boolean },
   ) {
     super(schema);
     this._backend = backend;
     this.dataPath = meta?.dataPath;
     this._queryLog = meta?.queryLog;
+    this.queryLogDisabled = meta?.queryLogDisabled ?? false;
   }
 
   get backend(): Backend {
@@ -677,7 +680,11 @@ export async function wave<S extends SchemaMap = {}>(
     queryLog = new QueryLog({ dataPath: resolved });
     backend = wrapBackendWithQueryLog(backend, queryLog);
   }
-  const db = new Database<S>(backend, (opts.schema ?? {}) as S, { dataPath: resolved, queryLog });
+  const db = new Database<S>(backend, (opts.schema ?? {}) as S, {
+    dataPath: resolved,
+    queryLog,
+    queryLogDisabled: !useQueryLog,
+  });
   const doPush = opts.push ?? Object.keys(db.schema).length > 0;
   if (doPush) {
     try {
