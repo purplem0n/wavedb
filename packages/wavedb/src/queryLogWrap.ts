@@ -2,11 +2,16 @@
 
 import { mapNativeError } from "./errors.ts";
 import type { Backend, TxBackend } from "./db.ts";
+import { formatIrForLog } from "./irToSql.ts";
 import { QueryLog, classifyStmt } from "./queryLog.ts";
 import type { Executor, RawResult } from "./query.ts";
 
 function logSqlFromStmt(stmt: unknown): string {
-  return String(JSON.stringify(stmt ?? null)).slice(0, 500);
+  try {
+    return formatIrForLog(stmt);
+  } catch {
+    return "/* unformattable statement */";
+  }
 }
 
 /** Wrap an executor so every `run` / `runSql` is recorded (in-process + HTTP share one log). */
