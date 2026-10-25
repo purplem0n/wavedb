@@ -34,6 +34,32 @@ describe("formatIrForLog", () => {
     expect(sql).not.toContain('"kind"');
   });
 
+  test("nested arithmetic is parenthesized", () => {
+    const sql = formatIrForLog({
+      kind: "select",
+      columns: [{ t: "star" }],
+      from: { name: "t" },
+      where: {
+        t: "bin",
+        op: "*",
+        l: { t: "bin", op: "+", l: { t: "col", name: "a" }, r: { t: "lit", v: 1 } },
+        r: { t: "lit", v: 2 },
+      },
+    });
+    expect(sql).toContain("(\"a\" + 1) * 2");
+  });
+
+  test("case-insensitive like renders ILIKE", () => {
+    const sql = formatIrForLog({
+      kind: "select",
+      columns: [{ t: "star" }],
+      from: { name: "t" },
+      where: { t: "like", e: { t: "col", name: "email" }, pattern: { t: "lit", v: "%x%" }, ci: true },
+    });
+    expect(sql).toContain("ILIKE");
+    expect(sql).not.toContain("(ci)");
+  });
+
   test("count star and pagination", () => {
     const sql = formatIrForLog({
       kind: "select",

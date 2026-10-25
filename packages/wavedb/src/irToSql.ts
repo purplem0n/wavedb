@@ -48,15 +48,16 @@ function formatExpr(expr: unknown, depth = 0): string {
       return `${l}${join}${r}`;
     }
     if (CMP_OPS.has(op)) return `${l} ${op === "!=" ? "<>" : op} ${r}`;
+    if (depth > 0) return `(${l} ${op} ${r})`;
     return `${l} ${op} ${r}`;
   }
   if (t === "like") {
     const e = formatExpr(expr.e);
     const pattern = formatExpr(expr.pattern);
-    const base = `${e} LIKE ${pattern}`;
-    const ci = expr.ci === true ? " (ci)" : "";
-    if (expr.negated === true) return `NOT (${base}${ci})`;
-    return base + ci;
+    const op = expr.ci === true ? "ILIKE" : "LIKE";
+    const base = `${e} ${op} ${pattern}`;
+    if (expr.negated === true) return `NOT (${base})`;
+    return base;
   }
   if (t === "between") {
     const e = formatExpr(expr.e);
@@ -77,6 +78,9 @@ function formatExpr(expr: unknown, depth = 0): string {
   }
   if (t === "not") return `NOT (${formatExpr(expr.e, depth + 1)})`;
   if (t === "func") {
+    if (expr.name === "default" && (!Array.isArray(expr.args) || expr.args.length === 0)) {
+      return "DEFAULT";
+    }
     const name = String(expr.name ?? "func").toUpperCase();
     if (expr.star === true && (!expr.args || (Array.isArray(expr.args) && expr.args.length === 0))) {
       return `${name}(*)`;
@@ -192,7 +196,20 @@ function formatCreateTable(stmt: IR): string {
     Array.isArray(stmt.primaryKey) && stmt.primaryKey.length > 0
       ? `, PRIMARY KEY (${stmt.primaryKey.map((x) => quoteIdent(String(x))).join(", ")})`
       : "";
-  return `CREATE TABLE ${ifNot}${name} (${cols}${pk})`;
+  const indexes = Array.isArray(stmt.indexes)
+    ? stmt.indexes
+        .filter(isRecord)
+        .map((index) => {
+          const unique = index.unique === true ? "UNIQUE " : "";
+          const columns = Array.isArray(index.columns)
+            ? index.columns.map((x) => quoteIdent(String(x))).join(", ")
+            : "";
+          return `CREATE ${unique}INDEX ${quoteIdent(String(index.name ?? "?"))} ON ${name} (${columns})`;
+        })
+        .join("; ")
+    : "";
+  const table = `CREATE TABLE ${ifNot}${name} (${cols}${pk})`;
+  return indexes ? `${table}; ${indexes}` : table;
 }
 
 function formatAlterTable(stmt: IR): string {
@@ -206,6 +223,20 @@ function formatAlterTable(stmt: IR): string {
   if (op === "dropColumn") return `ALTER TABLE ${table} DROP COLUMN ${quoteIdent(String(action.name ?? "?"))}`;
   if (op === "setAutoIncrement") {
     return `ALTER TABLE ${table} SET AUTOINCREMENT ${action.enabled === true ? "ON" : "OFF"}`;
+  }
+  if (op === "addForeignKey" && isRecord(action.fk)) {
+    const fk = action.fk;
+    const constraint =
+      typeof fk.name === "string" && fk.name.length > 0 ? `CONSTRAINT ${quoteIdent(fk.name)} ` : "";
+    const columns = Array.isArray(fk.columns) ? fk.columns.map((x) => quoteIdent(String(x))).join(", ") : "?";
+    const refColumns = Array.isArray(fk.refColumns)
+      ? fk.refColumns.map((x) => quoteIdent(String(x))).join(", ")
+      : "?";
+    return `ALTER TABLE ${table} ADD ${constraint}FOREIGN KEY (${columns}) REFERENCES ${quoteIdent(String(fk.refTable ?? "?"))} (${refColumns})`;
+  }
+  if (op === "dropConstraint") {
+    const ifExists = action.ifExists === true ? "IF EXISTS " : "";
+    return `ALTER TABLE ${table} DROP CONSTRAINT ${ifExists}${quoteIdent(String(action.name ?? "?"))}`;
   }
   return `ALTER TABLE ${table} …`;
 }
