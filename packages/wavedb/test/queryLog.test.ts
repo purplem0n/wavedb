@@ -31,6 +31,7 @@ describe("QueryLog", () => {
       const a = new QueryLog({ dataPath: dir });
       const id = a.record({ sql: "SELECT persist_me", ok: true }).id;
       expect(a.recent(5).some((e) => e.id === id)).toBe(true);
+      a.flush();
 
       const b = new QueryLog({ dataPath: dir });
       expect(b.recent(5).some((e) => e.sql.includes("persist_me"))).toBe(true);
@@ -46,6 +47,7 @@ describe("QueryLog", () => {
       a.record({ sql: "SELECT 1", ok: true });
       a.record({ sql: "INSERT INTO t VALUES (1)", ok: true });
       expect(a.getMetrics()).toEqual({ totalReads: 1, totalWrites: 1, totalOther: 0 });
+      a.flush();
 
       const b = new QueryLog({ dataPath: dir });
       expect(b.getMetrics()).toEqual({ totalReads: 1, totalWrites: 1, totalOther: 0 });

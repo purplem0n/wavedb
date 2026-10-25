@@ -39,6 +39,10 @@ export interface QueryLogOptions {
 
 const DEFAULT_MEMORY = 10_000;
 const MAX_MEMORY = 10_000;
+/** Append batch size before syncing JSONL to disk. */
+const LOG_FLUSH_BATCH = 256;
+/** Debounced metrics + log flush interval (ms). */
+const LOG_FLUSH_MS = 250;
 
 function waveDir(dataPath: string): string {
   return join(dataPath, ".wave");
@@ -194,6 +198,9 @@ export class QueryLog {
   private readonly metricsFile?: string;
   private readonly logFile?: string;
   private listeners = new Set<(entry: QueryLogEntry) => void>();
+  private pendingLogLines: string[] = [];
+  private metricsDirty = false;
+  private flushTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(opts: QueryLogOptions = {}) {
     const requested = opts.memoryLimit ?? DEFAULT_MEMORY;
@@ -230,6 +237,39 @@ export class QueryLog {
     return () => this.listeners.delete(fn);
   }
 
+  /** Sync batched log lines and metrics to disk (call before reading the log file from another process). */
+  flush(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+    if (this.metricsDirty && this.metricsFile) {
+      try {
+        writeMetricsAtomic(this.metricsFile, this.metrics);
+        this.metricsDirty = false;
+      } catch {
+        /* metrics must not break queries */
+      }
+    }
+    if (this.logFile && this.pendingLogLines.length > 0) {
+      try {
+        appendFileSync(this.logFile, this.pendingLogLines.join(""), { mode: 0o600 });
+        this.pendingLogLines = [];
+      } catch {
+        /* logging must not break queries */
+      }
+    }
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = undefined;
+      this.flush();
+    }, LOG_FLUSH_MS);
+    (this.flushTimer as any).unref?.();
+  }
+
   record(input: {
     sql: string;
     kind?: QueryKind;
@@ -261,23 +301,28 @@ export class QueryLog {
       trimmed = true;
     }
 
-    if (this.metricsFile) {
-      try {
-        writeMetricsAtomic(this.metricsFile, this.metrics);
-      } catch {
-        /* metrics must not break queries */
-      }
-    }
+    if (this.metricsFile) this.metricsDirty = true;
+
     if (this.logFile) {
       try {
         if (trimmed) {
+          this.pendingLogLines = [];
           writeLogAtomic(this.logFile, this.entries);
+          this.metricsDirty = false;
+          if (this.metricsFile) writeMetricsAtomic(this.metricsFile, this.metrics);
         } else {
-          appendFileSync(this.logFile, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+          this.pendingLogLines.push(`${JSON.stringify(entry)}\n`);
+          if (this.pendingLogLines.length >= LOG_FLUSH_BATCH) {
+            this.flush();
+          } else {
+            this.scheduleFlush();
+          }
         }
       } catch {
         /* logging must not break queries */
       }
+    } else if (this.metricsDirty && this.metricsFile) {
+      this.scheduleFlush();
     }
 
     for (const fn of this.listeners) {

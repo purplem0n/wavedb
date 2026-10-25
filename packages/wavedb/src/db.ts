@@ -606,6 +606,7 @@ export class Database<S extends SchemaMap = SchemaMap> extends Querier<S> {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this._queryLog?.flush();
     await this.backend.close();
   }
   [Symbol.asyncDispose](): Promise<void> {
@@ -633,6 +634,8 @@ export interface OpenOptions<S extends SchemaMap> {
   temporary?: boolean;
   /** apply the schema on open (create tables / add columns / indexes). Default: true when a schema is given. */
   push?: boolean | PushOptions;
+  /** Record queries for Studio Logs (default true when opening a data path). */
+  queryLog?: boolean;
 }
 
 /** Default on-disk path: `WAVE_DB_PATH` or `./data.wave`. */
@@ -669,8 +672,13 @@ export async function wave<S extends SchemaMap = {}>(
   } catch (e) {
     throw mapNativeError(e);
   }
-  const queryLog = new QueryLog({ dataPath: resolved });
-  const backend = wrapBackendWithQueryLog(new NativeBackend(handle), queryLog);
+  const useQueryLog = opts.queryLog !== false;
+  let backend: Backend = new NativeBackend(handle);
+  let queryLog: QueryLog | undefined;
+  if (useQueryLog) {
+    queryLog = new QueryLog({ dataPath: resolved });
+    backend = wrapBackendWithQueryLog(backend, queryLog);
+  }
   const db = new Database<S>(backend, (opts.schema ?? {}) as S, { dataPath: resolved, queryLog });
   const doPush = opts.push ?? Object.keys(db.schema).length > 0;
   if (doPush) {
