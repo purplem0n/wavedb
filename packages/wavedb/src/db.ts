@@ -447,13 +447,11 @@ export class Database<S extends SchemaMap = SchemaMap> extends Querier<S> {
     return this._queryLog;
   }
 
-  /** Attach query logging to this database (no-op if already enabled). Requires `dataPath`. */
-  enableQueryLog(): QueryLog {
+  /** Attach query logging to this database (no-op if already enabled). */
+  enableQueryLog(opts: { dataPath?: string } = {}): QueryLog {
     if (this._queryLog) return this._queryLog;
-    if (!this.dataPath) {
-      throw new WaveError("query log requires a database dataPath", "WAVE_INVALID");
-    }
-    this._queryLog = new QueryLog({ dataPath: this.dataPath });
+    const dataPath = opts.dataPath ?? this.dataPath;
+    this._queryLog = dataPath ? new QueryLog({ dataPath }) : new QueryLog();
     this._backend = wrapBackendWithQueryLog(this._backend, this._queryLog);
     return this._queryLog;
   }

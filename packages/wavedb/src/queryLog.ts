@@ -33,7 +33,7 @@ export interface QueryMetrics {
 
 export interface QueryLogOptions {
   dataPath?: string;
-  /** Max entries retained in memory and on disk (default 10_000; hard cap 10_000). */
+  /** Max entries retained in memory (default 10_000; hard cap 10_000). On-disk tail may briefly exceed this between compactions. */
   memoryLimit?: number;
 }
 
@@ -159,7 +159,7 @@ function loadPersistedEntries(logFile: string, limit: number): QueryLogEntry[] {
       }
     }
   }
-  parsed.sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+  parsed.sort((a, b) => a.at - b.at);
   if (parsed.length <= limit) return parsed;
   const out = parsed.slice(-limit);
   try {
@@ -201,10 +201,13 @@ export class QueryLog {
   private pendingLogLines: string[] = [];
   private metricsDirty = false;
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  private appendsSinceCompact = 0;
+  private readonly compactEvery: number;
 
   constructor(opts: QueryLogOptions = {}) {
     const requested = opts.memoryLimit ?? DEFAULT_MEMORY;
     this.memoryLimit = Math.max(1, Math.min(requested, MAX_MEMORY));
+    this.compactEvery = Math.max(1, Math.ceil(this.memoryLimit / 10));
     if (opts.dataPath) {
       const dir = waveDir(opts.dataPath);
       mkdirSync(dir, { recursive: true });
@@ -305,17 +308,20 @@ export class QueryLog {
 
     if (this.logFile) {
       try {
-        if (trimmed) {
-          this.pendingLogLines = [];
-          writeLogAtomic(this.logFile, this.entries);
-          this.metricsDirty = false;
-          if (this.metricsFile) writeMetricsAtomic(this.metricsFile, this.metrics);
+        this.pendingLogLines.push(`${JSON.stringify(entry)}\n`);
+        if (this.pendingLogLines.length >= LOG_FLUSH_BATCH) {
+          this.flush();
         } else {
-          this.pendingLogLines.push(`${JSON.stringify(entry)}\n`);
-          if (this.pendingLogLines.length >= LOG_FLUSH_BATCH) {
+          this.scheduleFlush();
+        }
+        if (trimmed) {
+          this.appendsSinceCompact += 1;
+          if (this.appendsSinceCompact >= this.compactEvery) {
             this.flush();
-          } else {
-            this.scheduleFlush();
+            writeLogAtomic(this.logFile, this.entries);
+            this.appendsSinceCompact = 0;
+            this.metricsDirty = false;
+            if (this.metricsFile) writeMetricsAtomic(this.metricsFile, this.metrics);
           }
         }
       } catch {
