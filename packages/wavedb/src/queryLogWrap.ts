@@ -7,7 +7,11 @@ import { QueryLog, classifyStmt } from "./queryLog.ts";
 import type { Executor, RawResult } from "./query.ts";
 
 function logSqlFromStmt(stmt: unknown): string {
-  return formatIrForLog(stmt);
+  try {
+    return formatIrForLog(stmt);
+  } catch {
+    return "/* unformattable statement */";
+  }
 }
 
 /** Wrap an executor so every `run` / `runSql` is recorded (in-process + HTTP share one log). */
