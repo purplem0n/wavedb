@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createWaveHandler } from "../src/server.ts";
 import { QueryLog, classifySql, classifyStmt } from "../src/queryLog.ts";
+import { openTmp } from "./helpers.ts";
 
 describe("classifySql", () => {
   test("read vs write keywords", () => {
@@ -23,6 +25,21 @@ describe("classifyStmt", () => {
 });
 
 describe("QueryLog", () => {
+  test("persists log entries across restarts", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wave-qlog-"));
+    try {
+      const a = new QueryLog({ dataPath: dir });
+      const id = a.record({ sql: "SELECT persist_me", ok: true }).id;
+      expect(a.recent(5).some((e) => e.id === id)).toBe(true);
+      a.flush();
+
+      const b = new QueryLog({ dataPath: dir });
+      expect(b.recent(5).some((e) => e.sql.includes("persist_me"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("persists metrics across instances", () => {
     const dir = mkdtempSync(join(tmpdir(), "wave-qlog-"));
     try {
@@ -30,6 +47,7 @@ describe("QueryLog", () => {
       a.record({ sql: "SELECT 1", ok: true });
       a.record({ sql: "INSERT INTO t VALUES (1)", ok: true });
       expect(a.getMetrics()).toEqual({ totalReads: 1, totalWrites: 1, totalOther: 0 });
+      a.flush();
 
       const b = new QueryLog({ dataPath: dir });
       expect(b.getMetrics()).toEqual({ totalReads: 1, totalWrites: 1, totalOther: 0 });
@@ -40,6 +58,30 @@ describe("QueryLog", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("in-process queries are logged once (HTTP /api/run does not duplicate)", async () => {
+    const { db, dir } = await openTmp({});
+    const handler = createWaveHandler(db, { dataPath: join(dir, "data.wave"), auth: false });
+    const readsBefore = db.queryLog!.getMetrics().totalReads;
+
+    await db.execute("SELECT 1 AS n");
+    expect(db.queryLog!.getMetrics().totalReads).toBe(readsBefore + 1);
+
+    const res = await handler.fetch(
+      new Request("http://x/api/run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sql: "SELECT 2 AS n" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(db.queryLog!.getMetrics().totalReads).toBe(readsBefore + 2);
+
+    const recent = db.queryLog!.recent(10);
+    expect(recent.filter((e) => e.sql.includes("SELECT 2")).length).toBe(1);
+    await handler.close();
+    await db.close();
   });
 
   test("recent(since) returns earliest new entries in order", () => {

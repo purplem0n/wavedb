@@ -6,7 +6,6 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -34,14 +33,16 @@ export interface QueryMetrics {
 
 export interface QueryLogOptions {
   dataPath?: string;
-  /** Max entries kept in memory (default 500). */
+  /** Max entries retained in memory (default 10_000; hard cap 10_000). On-disk tail may briefly exceed this between compactions. */
   memoryLimit?: number;
-  /** Max JSONL log file size before rotation (default 4 MiB). */
-  maxLogBytes?: number;
 }
 
-const DEFAULT_MEMORY = 500;
-const DEFAULT_MAX_LOG = 4 * 1024 * 1024;
+const DEFAULT_MEMORY = 10_000;
+const MAX_MEMORY = 10_000;
+/** Append batch size before syncing JSONL to disk. */
+const LOG_FLUSH_BATCH = 256;
+/** Debounced metrics + log flush interval (ms). */
+const LOG_FLUSH_MS = 250;
 
 function waveDir(dataPath: string): string {
   return join(dataPath, ".wave");
@@ -123,21 +124,65 @@ function writeMetricsAtomic(path: string, metrics: QueryMetrics): void {
   renameSync(tmp, path);
 }
 
-function rotateLogIfNeeded(path: string, maxBytes: number): void {
-  if (!existsSync(path)) return;
-  try {
-    if (statSync(path).size <= maxBytes) return;
-    const rotated = `${path}.1`;
-    if (existsSync(rotated)) {
+function isQueryLogEntry(raw: unknown): raw is QueryLogEntry {
+  if (!raw || typeof raw !== "object") return false;
+  const e = raw as QueryLogEntry;
+  return (
+    typeof e.id === "string" &&
+    typeof e.at === "number" &&
+    (e.kind === "read" || e.kind === "write" || e.kind === "other") &&
+    typeof e.sql === "string" &&
+    typeof e.ok === "boolean"
+  );
+}
+
+/** Load persisted JSONL (and legacy `.1` rotation) newest-last, capped at `limit`. */
+function loadPersistedEntries(logFile: string, limit: number): QueryLogEntry[] {
+  const paths = [`${logFile}.1`, logFile].filter((p) => existsSync(p));
+  if (paths.length === 0) return [];
+  const parsed: QueryLogEntry[] = [];
+  for (const path of paths) {
+    let text: string;
+    try {
+      text = readFileSync(path, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
       try {
-        unlinkSync(rotated);
+        const e = JSON.parse(trimmed) as unknown;
+        if (isQueryLogEntry(e)) parsed.push(e);
       } catch {
-        /* keep one generation */
+        /* skip corrupt line */
       }
     }
-    renameSync(path, rotated);
+  }
+  parsed.sort((a, b) => a.at - b.at);
+  if (parsed.length <= limit) return parsed;
+  const out = parsed.slice(-limit);
+  try {
+    writeLogAtomic(logFile, out);
   } catch {
-    /* ignore rotation errors */
+    /* keep in-memory tail even if compact fails */
+  }
+  return out;
+}
+
+function writeLogAtomic(logFile: string, entries: QueryLogEntry[]): void {
+  mkdirSync(dirname(logFile), { recursive: true });
+  const tmp = `${logFile}.${process.pid}.tmp`;
+  const body = entries.length ? `${entries.map((e) => JSON.stringify(e)).join("\n")}\n` : "";
+  writeFileSync(tmp, body, { mode: 0o600 });
+  renameSync(tmp, logFile);
+  const rotated = `${logFile}.1`;
+  if (existsSync(rotated)) {
+    try {
+      unlinkSync(rotated);
+    } catch {
+      /* drop legacy rotation */
+    }
   }
 }
 
@@ -150,20 +195,26 @@ export class QueryLog {
   private entries: QueryLogEntry[] = [];
   private metrics: QueryMetrics;
   private readonly memoryLimit: number;
-  private readonly maxLogBytes: number;
   private readonly metricsFile?: string;
   private readonly logFile?: string;
   private listeners = new Set<(entry: QueryLogEntry) => void>();
+  private pendingLogLines: string[] = [];
+  private metricsDirty = false;
+  private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  private appendsSinceCompact = 0;
+  private readonly compactEvery: number;
 
   constructor(opts: QueryLogOptions = {}) {
-    this.memoryLimit = opts.memoryLimit ?? DEFAULT_MEMORY;
-    this.maxLogBytes = opts.maxLogBytes ?? DEFAULT_MAX_LOG;
+    const requested = opts.memoryLimit ?? DEFAULT_MEMORY;
+    this.memoryLimit = Math.max(1, Math.min(requested, MAX_MEMORY));
+    this.compactEvery = Math.max(1, Math.ceil(this.memoryLimit / 10));
     if (opts.dataPath) {
       const dir = waveDir(opts.dataPath);
       mkdirSync(dir, { recursive: true });
       this.metricsFile = metricsPath(opts.dataPath);
       this.logFile = logPath(opts.dataPath);
       this.metrics = readMetrics(this.metricsFile);
+      this.entries = loadPersistedEntries(this.logFile, this.memoryLimit);
     } else {
       this.metrics = { totalReads: 0, totalWrites: 0, totalOther: 0 };
     }
@@ -187,6 +238,39 @@ export class QueryLog {
   subscribe(fn: (entry: QueryLogEntry) => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+
+  /** Sync batched log lines and metrics to disk (call before reading the log file from another process). */
+  flush(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+    if (this.metricsDirty && this.metricsFile) {
+      try {
+        writeMetricsAtomic(this.metricsFile, this.metrics);
+        this.metricsDirty = false;
+      } catch {
+        /* metrics must not break queries */
+      }
+    }
+    if (this.logFile && this.pendingLogLines.length > 0) {
+      try {
+        appendFileSync(this.logFile, this.pendingLogLines.join(""), { mode: 0o600 });
+        this.pendingLogLines = [];
+      } catch {
+        /* logging must not break queries */
+      }
+    }
+  }
+
+  private scheduleFlush(): void {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = undefined;
+      this.flush();
+    }, LOG_FLUSH_MS);
+    (this.flushTimer as any).unref?.();
   }
 
   record(input: {
@@ -214,24 +298,36 @@ export class QueryLog {
     else this.metrics.totalOther += 1;
 
     this.entries.push(entry);
+    let trimmed = false;
     if (this.entries.length > this.memoryLimit) {
       this.entries.splice(0, this.entries.length - this.memoryLimit);
+      trimmed = true;
     }
 
-    if (this.metricsFile) {
-      try {
-        writeMetricsAtomic(this.metricsFile, this.metrics);
-      } catch {
-        /* metrics must not break queries */
-      }
-    }
+    if (this.metricsFile) this.metricsDirty = true;
+
     if (this.logFile) {
       try {
-        rotateLogIfNeeded(this.logFile, this.maxLogBytes);
-        appendFileSync(this.logFile, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+        this.pendingLogLines.push(`${JSON.stringify(entry)}\n`);
+        if (this.pendingLogLines.length >= LOG_FLUSH_BATCH) {
+          this.flush();
+        } else {
+          this.scheduleFlush();
+        }
+        if (trimmed) {
+          this.appendsSinceCompact += 1;
+          if (this.appendsSinceCompact >= this.compactEvery) {
+            this.flush();
+            writeLogAtomic(this.logFile, this.entries);
+            this.pendingLogLines = [];
+            this.appendsSinceCompact = 0;
+          }
+        }
       } catch {
         /* logging must not break queries */
       }
+    } else if (this.metricsDirty && this.metricsFile) {
+      this.scheduleFlush();
     }
 
     for (const fn of this.listeners) {

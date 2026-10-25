@@ -29,6 +29,8 @@ import {
   type WhereInput,
 } from "./query.ts";
 import { loadNative, type NativeDb, type NativeTx } from "./native.ts";
+import { QueryLog } from "./queryLog.ts";
+import { wrapBackendWithQueryLog } from "./queryLogWrap.ts";
 import { tableAlias, tableMeta, type AnyTable, type InferSelect } from "./schema.ts";
 import { SqlFragment, compileSql } from "./sql.ts";
 
@@ -415,18 +417,46 @@ export interface PushOptions {
 }
 
 export class Database<S extends SchemaMap = SchemaMap> extends Querier<S> {
-  readonly exec: Executor;
   /** Local directory when opened via `wave()` (used by `waveHost` for auth / leader). */
   readonly dataPath?: string;
+  /** Set when opened with `wave({ queryLog: false })`; handlers must not re-enable logging. */
+  readonly queryLogDisabled: boolean;
+  private _backend: Backend;
+  private _queryLog?: QueryLog;
   private closed = false;
+
   constructor(
-    readonly backend: Backend,
+    backend: Backend,
     schema: S,
-    meta?: { dataPath?: string },
+    meta?: { dataPath?: string; queryLog?: QueryLog; queryLogDisabled?: boolean },
   ) {
     super(schema);
-    this.exec = backend.exec;
+    this._backend = backend;
     this.dataPath = meta?.dataPath;
+    this._queryLog = meta?.queryLog;
+    this.queryLogDisabled = meta?.queryLogDisabled ?? false;
+  }
+
+  get backend(): Backend {
+    return this._backend;
+  }
+
+  get exec(): Executor {
+    return this._backend.exec;
+  }
+
+  /** Durable query log when opened with a `dataPath` (shared with Studio `/api/query-log`). */
+  get queryLog(): QueryLog | undefined {
+    return this._queryLog;
+  }
+
+  /** Attach query logging to this database (no-op if already enabled). */
+  enableQueryLog(opts: { dataPath?: string } = {}): QueryLog {
+    if (this._queryLog) return this._queryLog;
+    const dataPath = opts.dataPath ?? this.dataPath;
+    this._queryLog = dataPath ? new QueryLog({ dataPath }) : new QueryLog();
+    this._backend = wrapBackendWithQueryLog(this._backend, this._queryLog);
+    return this._queryLog;
   }
 
   /** Start a manual transaction (remember to commit or rollback). */
@@ -577,6 +607,7 @@ export class Database<S extends SchemaMap = SchemaMap> extends Querier<S> {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this._queryLog?.flush();
     await this.backend.close();
   }
   [Symbol.asyncDispose](): Promise<void> {
@@ -604,6 +635,8 @@ export interface OpenOptions<S extends SchemaMap> {
   temporary?: boolean;
   /** apply the schema on open (create tables / add columns / indexes). Default: true when a schema is given. */
   push?: boolean | PushOptions;
+  /** Record queries for Studio Logs (default true when opening a data path). */
+  queryLog?: boolean;
 }
 
 /** Default on-disk path: `WAVE_DB_PATH` or `./data.wave`. */
@@ -640,7 +673,18 @@ export async function wave<S extends SchemaMap = {}>(
   } catch (e) {
     throw mapNativeError(e);
   }
-  const db = new Database<S>(new NativeBackend(handle), (opts.schema ?? {}) as S, { dataPath: resolved });
+  const useQueryLog = opts.queryLog !== false;
+  let backend: Backend = new NativeBackend(handle);
+  let queryLog: QueryLog | undefined;
+  if (useQueryLog) {
+    queryLog = new QueryLog({ dataPath: resolved });
+    backend = wrapBackendWithQueryLog(backend, queryLog);
+  }
+  const db = new Database<S>(backend, (opts.schema ?? {}) as S, {
+    dataPath: resolved,
+    queryLog,
+    queryLogDisabled: !useQueryLog,
+  });
   const doPush = opts.push ?? Object.keys(db.schema).length > 0;
   if (doPush) {
     try {

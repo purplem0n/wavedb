@@ -153,7 +153,11 @@ describe("large database (100k rows)", () => {
 
 describe("hot rows", () => {
   test("20k updates of one row stay fast (dead versions are skipped, not scanned)", async () => {
-    const db = await wave(join(tmpDir(), "hot.wave"), { schema: { customers }, durability: "async" });
+    const db = await wave(join(tmpDir(), "hot.wave"), {
+      schema: { customers },
+      durability: "async",
+      queryLog: false,
+    });
     await db.insert(customers).values({ id: 1, name: "n0", region: "r" });
     const t0 = performance.now();
     for (let i = 1; i <= 20_000; i++) await db.update(customers).set({ name: `n${i}` }).where(eq(customers.id, 1)).execute();

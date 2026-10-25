@@ -10,9 +10,9 @@ import type { Database, TxBackend } from "./db.ts";
 import { defaultWavePath } from "./db.ts";
 import type { TLSSocket } from "node:tls";
 import { acquireLeaderLease, startLeaderRenewal, type LeaderLease } from "./leader.ts";
+import { QueryLog } from "./queryLog.ts";
 import { initWaveAuth, normalizePrefix, type WaveAuth } from "./auth.ts";
 import { wavedbPackageVersion } from "./pkgVersion.ts";
-import { QueryLog, classifyStmt } from "./queryLog.ts";
 
 export interface HandlerOptions {
   /** Path to database directory (leader lease + superuser auth). */
@@ -234,7 +234,8 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       : undefined;
 
   const txs = new Map<string, { tx: TxBackend; timer: ReturnType<typeof setTimeout> }>();
-  const queryLog = resolvedDataPath ? new QueryLog({ dataPath: resolvedDataPath }) : new QueryLog();
+  const queryLog =
+    db.queryLog ?? (db.queryLogDisabled ? new QueryLog() : db.enableQueryLog({ dataPath: resolvedDataPath }));
   let stopLeader: (() => void) | undefined;
   let leader: LeaderLease | undefined;
   let active = true;
@@ -358,34 +359,9 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
     if (path === "/api/run") {
       const target = body.tx ? touch(String(body.tx)).tx.exec : db.backend.exec;
       const sql = body.sql !== undefined ? String(body.sql) : undefined;
-      const stmt = body.stmt;
-      const logSql =
-        sql ?? String(JSON.stringify(stmt ?? null)).slice(0, 500);
-      const logKind =
-        sql === undefined && typeof stmt === "object" && stmt !== null
-          ? classifyStmt(stmt as Record<string, unknown>)
-          : undefined;
-      try {
-        const r =
-          sql !== undefined ? await target.runSql(sql, body.params ?? []) : await target.run(body.stmt);
-        queryLog.record({
-          sql: logSql,
-          kind: logKind,
-          durationMs: r.durationMs,
-          rowsAffected: r.rowsAffected,
-          ok: true,
-        });
-        return jsonResponse(200, r);
-      } catch (e) {
-        const err = mapNativeError(e);
-        queryLog.record({
-          sql: logSql,
-          kind: logKind,
-          ok: false,
-          error: err.message,
-        });
-        throw e;
-      }
+      const r =
+        sql !== undefined ? await target.runSql(sql, body.params ?? []) : await target.run(body.stmt);
+      return jsonResponse(200, r);
     }
     if (path === "/api/tx/begin") {
       if (txs.size >= MAX_OPEN_TX) {
