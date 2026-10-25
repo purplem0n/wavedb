@@ -29,6 +29,8 @@ import {
   type WhereInput,
 } from "./query.ts";
 import { loadNative, type NativeDb, type NativeTx } from "./native.ts";
+import { QueryLog } from "./queryLog.ts";
+import { wrapBackendWithQueryLog } from "./queryLogWrap.ts";
 import { tableAlias, tableMeta, type AnyTable, type InferSelect } from "./schema.ts";
 import { SqlFragment, compileSql } from "./sql.ts";
 
@@ -415,18 +417,45 @@ export interface PushOptions {
 }
 
 export class Database<S extends SchemaMap = SchemaMap> extends Querier<S> {
-  readonly exec: Executor;
   /** Local directory when opened via `wave()` (used by `waveHost` for auth / leader). */
   readonly dataPath?: string;
+  private _backend: Backend;
+  private _queryLog?: QueryLog;
   private closed = false;
+
   constructor(
-    readonly backend: Backend,
+    backend: Backend,
     schema: S,
-    meta?: { dataPath?: string },
+    meta?: { dataPath?: string; queryLog?: QueryLog },
   ) {
     super(schema);
-    this.exec = backend.exec;
+    this._backend = backend;
     this.dataPath = meta?.dataPath;
+    this._queryLog = meta?.queryLog;
+  }
+
+  get backend(): Backend {
+    return this._backend;
+  }
+
+  get exec(): Executor {
+    return this._backend.exec;
+  }
+
+  /** Durable query log when opened with a `dataPath` (shared with Studio `/api/query-log`). */
+  get queryLog(): QueryLog | undefined {
+    return this._queryLog;
+  }
+
+  /** Attach query logging to this database (no-op if already enabled). Requires `dataPath`. */
+  enableQueryLog(): QueryLog {
+    if (this._queryLog) return this._queryLog;
+    if (!this.dataPath) {
+      throw new WaveError("query log requires a database dataPath", "WAVE_INVALID");
+    }
+    this._queryLog = new QueryLog({ dataPath: this.dataPath });
+    this._backend = wrapBackendWithQueryLog(this._backend, this._queryLog);
+    return this._queryLog;
   }
 
   /** Start a manual transaction (remember to commit or rollback). */
@@ -640,7 +669,9 @@ export async function wave<S extends SchemaMap = {}>(
   } catch (e) {
     throw mapNativeError(e);
   }
-  const db = new Database<S>(new NativeBackend(handle), (opts.schema ?? {}) as S, { dataPath: resolved });
+  const queryLog = new QueryLog({ dataPath: resolved });
+  const backend = wrapBackendWithQueryLog(new NativeBackend(handle), queryLog);
+  const db = new Database<S>(backend, (opts.schema ?? {}) as S, { dataPath: resolved, queryLog });
   const doPush = opts.push ?? Object.keys(db.schema).length > 0;
   if (doPush) {
     try {
