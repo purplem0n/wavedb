@@ -33,12 +33,21 @@ export interface QueryMetrics {
 
 export interface QueryLogOptions {
   dataPath?: string;
-  /** Max entries retained in memory (default 10_000; hard cap 10_000). On-disk tail may briefly exceed this between compactions. */
+  /**
+   * With `dataPath`: in-process ring buffer for live tail / `since` polling (default 512).
+   * Without `dataPath`: max entries kept entirely in RAM (default 10_000).
+   */
   memoryLimit?: number;
 }
 
-const DEFAULT_MEMORY = 10_000;
-const MAX_MEMORY = 10_000;
+/** Hot ring when persisting to disk (Studio poll + unflushed tail). */
+const DEFAULT_HOT_BUFFER = 512;
+const MAX_HOT_BUFFER = 2_000;
+/** Ephemeral in-memory-only log (no data path). */
+const DEFAULT_EPHEMERAL_MEMORY = 10_000;
+const MAX_EPHEMERAL_MEMORY = 10_000;
+/** Max JSONL lines retained on disk. */
+const DEFAULT_DISK_RETENTION = 10_000;
 /** Append batch size before syncing JSONL to disk. */
 const LOG_FLUSH_BATCH = 256;
 /** Debounced metrics + log flush interval (ms). */
@@ -136,8 +145,23 @@ function isQueryLogEntry(raw: unknown): raw is QueryLogEntry {
   );
 }
 
-/** Load persisted JSONL (and legacy `.1` rotation) newest-last, capped at `limit`. */
-function loadPersistedEntries(logFile: string, limit: number): QueryLogEntry[] {
+function parseLogText(text: string): QueryLogEntry[] {
+  const parsed: QueryLogEntry[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const e = JSON.parse(trimmed) as unknown;
+      if (isQueryLogEntry(e)) parsed.push(e);
+    } catch {
+      /* skip corrupt line */
+    }
+  }
+  return parsed;
+}
+
+/** Read persisted JSONL (and legacy `.1` rotation), sorted oldest-first. */
+function readAllLogEntries(logFile: string): QueryLogEntry[] {
   const paths = [`${logFile}.1`, logFile].filter((p) => existsSync(p));
   if (paths.length === 0) return [];
   const parsed: QueryLogEntry[] = [];
@@ -148,26 +172,10 @@ function loadPersistedEntries(logFile: string, limit: number): QueryLogEntry[] {
     } catch {
       continue;
     }
-    for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const e = JSON.parse(trimmed) as unknown;
-        if (isQueryLogEntry(e)) parsed.push(e);
-      } catch {
-        /* skip corrupt line */
-      }
-    }
+    parsed.push(...parseLogText(text));
   }
   parsed.sort((a, b) => a.at - b.at);
-  if (parsed.length <= limit) return parsed;
-  const out = parsed.slice(-limit);
-  try {
-    writeLogAtomic(logFile, out);
-  } catch {
-    /* keep in-memory tail even if compact fails */
-  }
-  return out;
+  return parsed;
 }
 
 function writeLogAtomic(logFile: string, entries: QueryLogEntry[]): void {
@@ -186,15 +194,32 @@ function writeLogAtomic(logFile: string, entries: QueryLogEntry[]): void {
   }
 }
 
+/** Trim on-disk JSONL to the newest `retention` entries (read on `/api/query-log`, not at process start). */
+function compactLogFileIfNeeded(logFile: string, retention: number): void {
+  const all = readAllLogEntries(logFile);
+  if (all.length <= retention) return;
+  writeLogAtomic(logFile, all.slice(-retention));
+}
+
 function truncateSql(sql: string, max = 2000): string {
   const s = sql.replace(/\s+/g, " ").trim();
   return s.length <= max ? s : `${s.slice(0, max)}…`;
 }
 
+function mergeEntries(a: QueryLogEntry[], b: QueryLogEntry[]): QueryLogEntry[] {
+  const byId = new Map<string, QueryLogEntry>();
+  for (const e of a) byId.set(e.id, e);
+  for (const e of b) byId.set(e.id, e);
+  return [...byId.values()].sort((x, y) => x.at - y.at);
+}
+
 export class QueryLog {
-  private entries: QueryLogEntry[] = [];
+  /** Hot ring (persisted logs also append to JSONL). */
+  private hot: QueryLogEntry[] = [];
   private metrics: QueryMetrics;
-  private readonly memoryLimit: number;
+  /** Max hot entries when `logFile` is set; else max in-memory entries. */
+  private readonly hotLimit: number;
+  private readonly diskRetention: number;
   private readonly metricsFile?: string;
   private readonly logFile?: string;
   private listeners = new Set<(entry: QueryLogEntry) => void>();
@@ -205,17 +230,21 @@ export class QueryLog {
   private readonly compactEvery: number;
 
   constructor(opts: QueryLogOptions = {}) {
-    const requested = opts.memoryLimit ?? DEFAULT_MEMORY;
-    this.memoryLimit = Math.max(1, Math.min(requested, MAX_MEMORY));
-    this.compactEvery = Math.max(1, Math.ceil(this.memoryLimit / 10));
     if (opts.dataPath) {
+      const requested = opts.memoryLimit ?? DEFAULT_HOT_BUFFER;
+      this.hotLimit = Math.max(1, Math.min(requested, MAX_HOT_BUFFER));
+      this.diskRetention = DEFAULT_DISK_RETENTION;
+      this.compactEvery = Math.max(1, Math.ceil(this.diskRetention / 10));
       const dir = waveDir(opts.dataPath);
       mkdirSync(dir, { recursive: true });
       this.metricsFile = metricsPath(opts.dataPath);
       this.logFile = logPath(opts.dataPath);
       this.metrics = readMetrics(this.metricsFile);
-      this.entries = loadPersistedEntries(this.logFile, this.memoryLimit);
     } else {
+      const requested = opts.memoryLimit ?? DEFAULT_EPHEMERAL_MEMORY;
+      this.hotLimit = Math.max(1, Math.min(requested, MAX_EPHEMERAL_MEMORY));
+      this.diskRetention = DEFAULT_DISK_RETENTION;
+      this.compactEvery = Math.max(1, Math.ceil(this.hotLimit / 10));
       this.metrics = { totalReads: 0, totalWrites: 0, totalOther: 0 };
     }
   }
@@ -225,14 +254,33 @@ export class QueryLog {
   }
 
   recent(limit = 100, sinceId?: string): QueryLogEntry[] {
-    const cap = Math.max(1, Math.min(limit, this.memoryLimit));
+    const cap = Math.max(1, Math.min(limit, this.logFile ? DEFAULT_DISK_RETENTION : this.hotLimit));
+
+    if (!this.logFile) {
+      if (sinceId) {
+        const idx = this.hot.findIndex((e) => e.id === sinceId);
+        if (idx >= 0) return this.hot.slice(idx + 1, idx + 1 + cap);
+      }
+      return this.hot.slice(-cap);
+    }
+
     if (sinceId) {
-      const idx = this.entries.findIndex((e) => e.id === sinceId);
-      if (idx >= 0) {
-        return this.entries.slice(idx + 1, idx + 1 + cap);
+      const hotIdx = this.hot.findIndex((e) => e.id === sinceId);
+      if (hotIdx >= 0) return this.hot.slice(hotIdx + 1, hotIdx + 1 + cap);
+
+      this.flush();
+      const onDisk = readAllLogEntries(this.logFile);
+      const diskIdx = onDisk.findIndex((e) => e.id === sinceId);
+      if (diskIdx >= 0) {
+        const sinceAt = onDisk[diskIdx]!.at;
+        const afterDisk = onDisk.slice(diskIdx + 1);
+        const newerHot = this.hot.filter((e) => e.at > sinceAt);
+        return mergeEntries(afterDisk, newerHot).slice(0, cap);
       }
     }
-    return this.entries.slice(-cap);
+
+    const diskTail = existsSync(this.logFile) ? readAllLogEntries(this.logFile).slice(-cap) : [];
+    return mergeEntries(diskTail, this.hot).slice(-cap);
   }
 
   subscribe(fn: (entry: QueryLogEntry) => void): () => void {
@@ -273,6 +321,26 @@ export class QueryLog {
     (this.flushTimer as any).unref?.();
   }
 
+  private pushHot(entry: QueryLogEntry): void {
+    this.hot.push(entry);
+    if (this.hot.length > this.hotLimit) {
+      this.hot.splice(0, this.hot.length - this.hotLimit);
+    }
+  }
+
+  private maybeCompactDisk(): void {
+    if (!this.logFile) return;
+    this.appendsSinceCompact += 1;
+    if (this.appendsSinceCompact < this.compactEvery) return;
+    this.flush();
+    try {
+      compactLogFileIfNeeded(this.logFile, this.diskRetention);
+      this.appendsSinceCompact = 0;
+    } catch {
+      /* compaction must not break queries */
+    }
+  }
+
   record(input: {
     sql: string;
     kind?: QueryKind;
@@ -297,12 +365,7 @@ export class QueryLog {
     else if (kind === "write") this.metrics.totalWrites += 1;
     else this.metrics.totalOther += 1;
 
-    this.entries.push(entry);
-    let trimmed = false;
-    if (this.entries.length > this.memoryLimit) {
-      this.entries.splice(0, this.entries.length - this.memoryLimit);
-      trimmed = true;
-    }
+    this.pushHot(entry);
 
     if (this.metricsFile) this.metricsDirty = true;
 
@@ -314,15 +377,7 @@ export class QueryLog {
         } else {
           this.scheduleFlush();
         }
-        if (trimmed) {
-          this.appendsSinceCompact += 1;
-          if (this.appendsSinceCompact >= this.compactEvery) {
-            this.flush();
-            writeLogAtomic(this.logFile, this.entries);
-            this.pendingLogLines = [];
-            this.appendsSinceCompact = 0;
-          }
-        }
+        this.maybeCompactDisk();
       } catch {
         /* logging must not break queries */
       }

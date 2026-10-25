@@ -132,6 +132,25 @@ describe("QueryLog", () => {
     expect(log.recent(1)[0]!.sql).toBe("/* unformattable statement */");
   });
 
+  test("does not preload JSONL into memory on open", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wave-qlog-"));
+    try {
+      const a = new QueryLog({ dataPath: dir });
+      for (let i = 0; i < 600; i++) {
+        a.record({ sql: `SELECT ${i}`, ok: true });
+      }
+      a.flush();
+
+      const b = new QueryLog({ dataPath: dir });
+      const tail = b.recent(700);
+      expect(tail.length).toBe(600);
+      expect(tail[0]!.sql).toBe("SELECT 0");
+      expect(tail[599]!.sql).toBe("SELECT 599");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("recent(since) returns earliest new entries in order", () => {
     const log = new QueryLog({ memoryLimit: 500 });
     const ids: string[] = [];
