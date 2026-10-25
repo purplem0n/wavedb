@@ -109,6 +109,29 @@ describe("QueryLog", () => {
     expect(entry.sql).not.toContain('"kind"');
   });
 
+  test("typed IR formatter failure still runs query and logs fallback", async () => {
+    const log = new QueryLog();
+    let ran = false;
+    const inner: Executor = {
+      async run() {
+        ran = true;
+        return { columns: [], rows: [], rowsAffected: 0, durationMs: 0.1 };
+      },
+      async runSql() {
+        return { columns: [], rows: [], rowsAffected: 0, durationMs: 0.1 };
+      },
+    };
+    const exec = wrapExecutorWithQueryLog(inner, log);
+    await exec.run({
+      kind: "insert",
+      table: "products",
+      columns: ["id"],
+      rows: [[{ t: "lit", v: BigInt(1) }]],
+    });
+    expect(ran).toBe(true);
+    expect(log.recent(1)[0]!.sql).toBe("/* unformattable statement */");
+  });
+
   test("recent(since) returns earliest new entries in order", () => {
     const log = new QueryLog({ memoryLimit: 500 });
     const ids: string[] = [];
