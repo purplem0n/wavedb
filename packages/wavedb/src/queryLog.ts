@@ -2,10 +2,14 @@
 
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -145,19 +149,134 @@ function isQueryLogEntry(raw: unknown): raw is QueryLogEntry {
   );
 }
 
+function parseLogLine(line: string): QueryLogEntry | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) return undefined;
+  try {
+    const e = JSON.parse(trimmed) as unknown;
+    return isQueryLogEntry(e) ? e : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function parseLogText(text: string): QueryLogEntry[] {
   const parsed: QueryLogEntry[] = [];
   for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const e = JSON.parse(trimmed) as unknown;
-      if (isQueryLogEntry(e)) parsed.push(e);
-    } catch {
-      /* skip corrupt line */
-    }
+    const e = parseLogLine(line);
+    if (e) parsed.push(e);
   }
   return parsed;
+}
+
+/** Read up to `maxLines` complete lines from the end of a file (no full-file string). */
+function readLastLines(path: string, maxLines: number): string[] {
+  if (maxLines <= 0) return [];
+  const fd = openSync(path, "r");
+  try {
+    const { size } = statSync(path);
+    if (size === 0) return [];
+    const chunkSize = 64 * 1024;
+    let position = size;
+    let carry = "";
+    const lines: string[] = [];
+    while (position > 0 && lines.length < maxLines) {
+      const readSize = Math.min(chunkSize, position);
+      position -= readSize;
+      const buf = Buffer.alloc(readSize);
+      readSync(fd, buf, 0, readSize, position);
+      const text = buf.toString("utf8") + carry;
+      const parts = text.split("\n");
+      carry = parts[0] ?? "";
+      for (let i = parts.length - 1; i >= 1; i--) {
+        const line = parts[i]!;
+        if (line.trim()) lines.unshift(line);
+        if (lines.length >= maxLines) break;
+      }
+    }
+    if (carry.trim() && lines.length < maxLines) lines.unshift(carry);
+    return lines.slice(-maxLines);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function logFilePaths(logFile: string): string[] {
+  return [`${logFile}.1`, logFile].filter((p) => existsSync(p));
+}
+
+/** Newest-last tail of persisted JSONL without loading the full file. */
+function readLogTail(logFile: string, limit: number): QueryLogEntry[] {
+  const paths = logFilePaths(logFile);
+  if (paths.length === 0 || limit <= 0) return [];
+  const entries: QueryLogEntry[] = [];
+  for (const path of paths) {
+    for (const line of readLastLines(path, limit)) {
+      const e = parseLogLine(line);
+      if (e) entries.push(e);
+    }
+  }
+  entries.sort((a, b) => a.at - b.at);
+  return entries.slice(-limit);
+}
+
+/** Scan JSONL in file order for `sinceId`; collect up to `limit` entries after it (chunked reads). */
+function readLogSince(
+  logFile: string,
+  sinceId: string,
+  limit: number,
+): { found: false } | { found: true; sinceAt: number; after: QueryLogEntry[] } {
+  const paths = logFilePaths(logFile);
+  if (paths.length === 0) return { found: false };
+  let matched = false;
+  let sinceAt = 0;
+  const after: QueryLogEntry[] = [];
+  const bufSize = 256 * 1024;
+
+  for (const path of paths) {
+    const fd = openSync(path, "r");
+    try {
+      const { size } = statSync(path);
+      let position = 0;
+      let carry = "";
+      const buf = Buffer.alloc(bufSize);
+      while (position < size) {
+        const n = readSync(fd, buf, 0, Math.min(bufSize, size - position), position);
+        position += n;
+        const chunk = carry + buf.toString("utf8", 0, n);
+        const parts = chunk.split("\n");
+        carry = parts.pop() ?? "";
+        for (const line of parts) {
+          const entry = parseLogLine(line);
+          if (!entry) continue;
+          if (!matched) {
+            if (entry.id === sinceId) {
+              matched = true;
+              sinceAt = entry.at;
+            }
+            continue;
+          }
+          after.push(entry);
+        }
+      }
+      if (carry.trim()) {
+        const entry = parseLogLine(carry);
+        if (entry) {
+          if (!matched && entry.id === sinceId) {
+            matched = true;
+            sinceAt = entry.at;
+          } else if (matched) {
+            after.push(entry);
+          }
+        }
+      }
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  if (!matched) return { found: false };
+  return { found: true, sinceAt, after: after.slice(0, limit) };
 }
 
 /** Read persisted JSONL (and legacy `.1` rotation), sorted oldest-first. */
@@ -269,17 +388,14 @@ export class QueryLog {
       if (hotIdx >= 0) return this.hot.slice(hotIdx + 1, hotIdx + 1 + cap);
 
       this.flush();
-      const onDisk = readAllLogEntries(this.logFile);
-      const diskIdx = onDisk.findIndex((e) => e.id === sinceId);
-      if (diskIdx >= 0) {
-        const sinceAt = onDisk[diskIdx]!.at;
-        const afterDisk = onDisk.slice(diskIdx + 1);
-        const newerHot = this.hot.filter((e) => e.at > sinceAt);
-        return mergeEntries(afterDisk, newerHot).slice(0, cap);
+      const diskSince = readLogSince(this.logFile, sinceId, cap);
+      if (diskSince.found) {
+        const newerHot = this.hot.filter((e) => e.at > diskSince.sinceAt);
+        return mergeEntries(diskSince.after, newerHot).slice(0, cap);
       }
     }
 
-    const diskTail = existsSync(this.logFile) ? readAllLogEntries(this.logFile).slice(-cap) : [];
+    const diskTail = existsSync(this.logFile) ? readLogTail(this.logFile, cap) : [];
     return mergeEntries(diskTail, this.hot).slice(-cap);
   }
 
