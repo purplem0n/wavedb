@@ -170,8 +170,12 @@ function parseLogText(text: string): QueryLogEntry[] {
   return parsed;
 }
 
-/** Read up to `maxLines` complete lines from the end of a file (no full-file string). */
-function readLastLines(path: string, maxLines: number): string[] {
+/** Read up to `maxLines` accepted complete lines from the end of a file (no full-file string). */
+function readLastLines(
+  path: string,
+  maxLines: number,
+  accept: (line: string) => boolean = () => true,
+): string[] {
   if (maxLines <= 0) return [];
   const fd = openSync(path, "r");
   try {
@@ -181,6 +185,10 @@ function readLastLines(path: string, maxLines: number): string[] {
     let position = size;
     let buffer = Buffer.alloc(0);
     const lines: string[] = [];
+    const pushLine = (raw: Buffer) => {
+      const line = raw.toString("utf8").trim();
+      if (line && accept(line)) lines.unshift(line);
+    };
     while (position > 0 && lines.length < maxLines) {
       const readSize = Math.min(chunkSize, position);
       position -= readSize;
@@ -192,13 +200,11 @@ function readLastLines(path: string, maxLines: number): string[] {
         if (lastNl < 0) break;
         const lineBuf = buffer.subarray(lastNl + 1);
         buffer = buffer.subarray(0, lastNl);
-        const line = lineBuf.toString("utf8").trim();
-        if (line) lines.unshift(line);
+        pushLine(lineBuf);
       }
     }
     if (buffer.length > 0 && lines.length < maxLines) {
-      const line = buffer.toString("utf8").trim();
-      if (line) lines.unshift(line);
+      pushLine(buffer);
     }
     return lines.slice(-maxLines);
   } finally {
@@ -216,7 +222,7 @@ function readLogTail(logFile: string, limit: number): QueryLogEntry[] {
   if (paths.length === 0 || limit <= 0) return [];
   const entries: QueryLogEntry[] = [];
   for (const path of paths) {
-    for (const line of readLastLines(path, limit)) {
+    for (const line of readLastLines(path, limit, (line) => parseLogLine(line) !== undefined)) {
       const e = parseLogLine(line);
       if (e) entries.push(e);
     }
