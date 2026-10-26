@@ -446,7 +446,7 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
     }
 
     const studioMount = normalizePrefix(staticPrefix);
-    if (request.method === "GET" && studioMount && pathname === studioMount) {
+    if (request.method === "GET" && staticDir && studioMount && pathname === studioMount) {
       const target = new URL(request.url);
       target.pathname = `${studioMount}/`;
       return Response.redirect(target, 308);
@@ -470,13 +470,13 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       }
     }
 
-    const staticRel = staticRelPath(pathname, staticPrefix);
+    const staticRel = staticDir ? staticRelPath(pathname, staticPrefix) : undefined;
     if (staticRel !== undefined) {
       return serveStaticFile(staticRel);
     }
 
     // Standalone: root `/` serves studio when staticPrefix is `/`
-    if (!normalizePrefix(staticPrefix) && (pathname === "/" || pathname === "")) {
+    if (staticDir && !normalizePrefix(staticPrefix) && (pathname === "/" || pathname === "")) {
       return serveStaticFile("");
     }
 
@@ -525,8 +525,11 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
             return res.end();
           }
         }
-        const staticRel = staticRelPath(url.pathname, staticPrefix);
-        if (staticRel !== undefined || (!normalizePrefix(staticPrefix) && url.pathname === "/")) {
+        const staticRel = staticDir ? staticRelPath(url.pathname, staticPrefix) : undefined;
+        if (
+          staticDir &&
+          (staticRel !== undefined || (!normalizePrefix(staticPrefix) && url.pathname === "/"))
+        ) {
           const response = serveStaticFile(staticRel ?? "");
           const buf = Buffer.from(await response.arrayBuffer());
           const headers: Record<string, string> = {};

@@ -39,7 +39,7 @@ export interface QueryMetrics {
 export interface QueryLogOptions {
   dataPath?: string;
   /**
-   * With `dataPath`: in-process ring buffer for live tail / `since` polling (default 512).
+   * With `dataPath`: in-process ring buffer for live tail / `since` polling (default 128).
    * Without `dataPath`: max entries kept entirely in RAM (default 10_000).
    */
   memoryLimit?: number;

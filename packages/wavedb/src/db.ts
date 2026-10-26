@@ -645,10 +645,13 @@ export function defaultWavePath(): string {
 }
 
 function resolveCacheMb(explicit?: number): number {
-  if (explicit !== undefined && explicit > 0) return explicit;
+  if (explicit !== undefined) {
+    const n = Math.floor(explicit);
+    if (n > 0) return n;
+  }
   const raw = process.env.WAVE_CACHE_MB?.trim();
   if (raw) {
-    const n = Number(raw);
+    const n = Math.floor(Number(raw));
     if (Number.isFinite(n) && n > 0) return n;
   }
   return 16;
