@@ -14,6 +14,23 @@ function logSqlFromStmt(stmt: unknown): string {
   }
 }
 
+function briefIrForLog(stmt: Record<string, unknown>): string {
+  const kind = typeof stmt.kind === "string" ? stmt.kind.toLowerCase() : "stmt";
+  if (kind === "select" || kind === "explain") {
+    const from = stmt.from;
+    const table =
+      typeof from === "object" && from !== null && "name" in from && typeof (from as { name: unknown }).name === "string"
+        ? (from as { name: string }).name
+        : "?";
+    return `${kind === "select" ? "SELECT" : "EXPLAIN"} … FROM ${table}`;
+  }
+  if (kind === "insert" || kind === "update" || kind === "delete") {
+    const table = typeof stmt.table === "string" ? stmt.table : "?";
+    return `${kind.toUpperCase()} ${table}`;
+  }
+  return kind.toUpperCase();
+}
+
 /** Wrap an executor so every `run` / `runSql` is recorded (in-process + HTTP share one log). */
 export function wrapExecutorWithQueryLog(inner: Executor, queryLog: QueryLog): Executor {
   return {
@@ -21,10 +38,13 @@ export function wrapExecutorWithQueryLog(inner: Executor, queryLog: QueryLog): E
       const logSql = logSqlFromStmt(stmt);
       const logKind =
         typeof stmt === "object" && stmt !== null ? classifyStmt(stmt as Record<string, unknown>) : undefined;
+      const hotSql =
+        typeof stmt === "object" && stmt !== null ? briefIrForLog(stmt as Record<string, unknown>) : logSql;
       try {
         const r = await inner.run(stmt);
         queryLog.record({
           sql: logSql,
+          hotSql,
           kind: logKind,
           durationMs: r.durationMs,
           rowsAffected: r.rowsAffected,
@@ -33,7 +53,7 @@ export function wrapExecutorWithQueryLog(inner: Executor, queryLog: QueryLog): E
         return r;
       } catch (e) {
         const err = mapNativeError(e);
-        queryLog.record({ sql: logSql, kind: logKind, ok: false, error: err.message });
+        queryLog.record({ sql: logSql, hotSql, kind: logKind, ok: false, error: err.message });
         throw e;
       }
     },

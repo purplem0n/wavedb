@@ -629,7 +629,7 @@ export interface OpenOptions<S extends SchemaMap> {
   schema?: S;
   /** `sync` (default): fsync before commit returns. `async`: faster, may lose the last few ms on power loss. */
   durability?: Durability;
-  /** block cache size in MiB */
+  /** Block cache size in MiB (default 16, or `WAVE_CACHE_MB`). Raise for heavy read workloads. */
   cacheMb?: number;
   /** delete data on close (tests) */
   temporary?: boolean;
@@ -642,6 +642,19 @@ export interface OpenOptions<S extends SchemaMap> {
 /** Default on-disk path: `WAVE_DB_PATH` or `./data.wave`. */
 export function defaultWavePath(): string {
   return process.env.WAVE_DB_PATH?.trim() || "./data.wave";
+}
+
+function resolveCacheMb(explicit?: number): number {
+  if (explicit !== undefined) {
+    const n = Math.floor(explicit);
+    if (n > 0) return n;
+  }
+  const raw = process.env.WAVE_CACHE_MB?.trim();
+  if (raw) {
+    const n = Math.floor(Number(raw));
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 16;
 }
 
 /** Open (or create) a database directory. Prefer `wave({ schema })`; path defaults from env. */
@@ -668,7 +681,7 @@ export async function wave<S extends SchemaMap = {}>(
   try {
     handle = native.NativeDb.open(
       resolved,
-      JSON.stringify({ durability, cacheMb: opts.cacheMb, temporary: opts.temporary }),
+      JSON.stringify({ durability, cacheMb: resolveCacheMb(opts.cacheMb), temporary: opts.temporary }),
     );
   } catch (e) {
     throw mapNativeError(e);

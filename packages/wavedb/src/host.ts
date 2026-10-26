@@ -10,8 +10,8 @@ import { normalizePrefix } from "./auth.ts";
 import { createWaveHandler, waveMiddleware, type HandlerOptions, type WaveHandler } from "./server.ts";
 
 export interface WaveHostOptions extends Omit<HandlerOptions, "staticPrefix" | "apiPrefix" | "staticDir"> {
-  /** URL path for Studio (default `/wavedb-studio`). */
-  studio?: string;
+  /** Mount Studio static assets (default true). Set false for API-only embeds. */
+  studio?: boolean | string;
   /** URL prefix for Wave HTTP API (default `/__wave/api`). */
   apiPrefix?: string;
   /** Built Studio `dist/`; auto-detected when omitted. */
@@ -69,9 +69,11 @@ function resolveEmbedHandlerOptions(db: Database<any>, opts: WaveHostOptions): H
 
 /** Mount Wave Studio + HTTP API on an existing server (minimal Hono/Bun integration). */
 export function waveHost(db: Database<any>, opts: WaveHostOptions = {}): WaveHost {
-  const studioPath = opts.studio ?? "/wavedb-studio";
+  const studioOpt = opts.studio ?? true;
+  const studioEnabled = studioOpt !== false;
+  const studioPath = typeof studioOpt === "string" ? studioOpt : "/wavedb-studio";
   const apiPrefix = opts.apiPrefix ?? "/__wave/api";
-  const staticDir = opts.staticDir ?? resolveStudioDist();
+  const staticDir = studioEnabled ? (opts.staticDir ?? resolveStudioDist()) : undefined;
   const handlerOpts = resolveEmbedHandlerOptions(db, opts);
   const handler = createWaveHandler(db, {
     ...handlerOpts,

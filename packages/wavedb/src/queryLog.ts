@@ -39,15 +39,17 @@ export interface QueryMetrics {
 export interface QueryLogOptions {
   dataPath?: string;
   /**
-   * With `dataPath`: in-process ring buffer for live tail / `since` polling (default 512).
+   * With `dataPath`: in-process ring buffer for live tail / `since` polling (default 128).
    * Without `dataPath`: max entries kept entirely in RAM (default 10_000).
    */
   memoryLimit?: number;
 }
 
 /** Hot ring when persisting to disk (Studio poll + unflushed tail). */
-const DEFAULT_HOT_BUFFER = 512;
+const DEFAULT_HOT_BUFFER = 128;
 const MAX_HOT_BUFFER = 2_000;
+/** Shorter SQL kept in the hot ring; full text is on disk JSONL. */
+const HOT_SQL_MAX = 160;
 /** Ephemeral in-memory-only log (no data path). */
 const DEFAULT_EPHEMERAL_MEMORY = 10_000;
 const MAX_EPHEMERAL_MEMORY = 10_000;
@@ -476,6 +478,8 @@ export class QueryLog {
 
   record(input: {
     sql: string;
+    /** In-memory tail only; defaults to a truncated `sql` when persisting to disk. */
+    hotSql?: string;
     kind?: QueryKind;
     durationMs?: number;
     rowsAffected?: number;
@@ -483,28 +487,33 @@ export class QueryLog {
     error?: string;
   }): QueryLogEntry {
     const kind = input.kind ?? classifySql(input.sql);
-    const entry: QueryLogEntry = {
-      id: randomUUID(),
-      at: Date.now(),
+    const id = randomUUID();
+    const at = Date.now();
+    const base = {
+      id,
+      at,
       kind,
-      sql: truncateSql(input.sql),
       durationMs: input.durationMs,
       rowsAffected: input.rowsAffected,
       ok: input.ok,
       error: input.error,
     };
+    const diskSql = truncateSql(input.sql);
+    const hotSql = truncateSql(input.hotSql ?? input.sql, HOT_SQL_MAX);
+    const hotEntry: QueryLogEntry = { ...base, sql: this.logFile ? hotSql : diskSql };
+    const diskEntry: QueryLogEntry = { ...base, sql: diskSql };
 
     if (kind === "read") this.metrics.totalReads += 1;
     else if (kind === "write") this.metrics.totalWrites += 1;
     else this.metrics.totalOther += 1;
 
-    this.pushHot(entry);
+    this.pushHot(hotEntry);
 
     if (this.metricsFile) this.metricsDirty = true;
 
     if (this.logFile) {
       try {
-        this.pendingLogLines.push(`${JSON.stringify(entry)}\n`);
+        this.pendingLogLines.push(`${JSON.stringify(diskEntry)}\n`);
         if (this.pendingLogLines.length >= LOG_FLUSH_BATCH) {
           this.flush();
         } else {
@@ -520,11 +529,11 @@ export class QueryLog {
 
     for (const fn of this.listeners) {
       try {
-        fn(entry);
+        fn(hotEntry);
       } catch {
         /* ignore */
       }
     }
-    return entry;
+    return hotEntry;
   }
 }
