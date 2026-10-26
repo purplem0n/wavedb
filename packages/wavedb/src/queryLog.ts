@@ -179,31 +179,25 @@ function readLastLines(path: string, maxLines: number): string[] {
     if (size === 0) return [];
     const chunkSize = 64 * 1024;
     let position = size;
-    let carry = Buffer.alloc(0);
+    let buffer = Buffer.alloc(0);
     const lines: string[] = [];
     while (position > 0 && lines.length < maxLines) {
       const readSize = Math.min(chunkSize, position);
       position -= readSize;
-      const buf = Buffer.alloc(readSize);
-      readSync(fd, buf, 0, readSize, position);
-      const combined = Buffer.concat([buf, carry]);
-      let lineStart = 0;
-      const lineBufs: Buffer[] = [];
-      for (let i = 0; i < combined.length; i++) {
-        if (combined[i] === 0x0a) {
-          lineBufs.push(combined.subarray(lineStart, i));
-          lineStart = i + 1;
-        }
-      }
-      carry = combined.subarray(lineStart);
-      for (let i = lineBufs.length - 1; i >= 0; i--) {
-        const line = lineBufs[i]!.toString("utf8").trim();
+      const chunk = Buffer.alloc(readSize);
+      readSync(fd, chunk, 0, readSize, position);
+      buffer = Buffer.concat([chunk, buffer]);
+      while (lines.length < maxLines) {
+        const lastNl = buffer.lastIndexOf(0x0a);
+        if (lastNl < 0) break;
+        const lineBuf = buffer.subarray(lastNl + 1);
+        buffer = buffer.subarray(0, lastNl);
+        const line = lineBuf.toString("utf8").trim();
         if (line) lines.unshift(line);
-        if (lines.length >= maxLines) break;
       }
     }
-    if (carry.length > 0 && lines.length < maxLines) {
-      const line = carry.toString("utf8").trim();
+    if (buffer.length > 0 && lines.length < maxLines) {
+      const line = buffer.toString("utf8").trim();
       if (line) lines.unshift(line);
     }
     return lines.slice(-maxLines);
