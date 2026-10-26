@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 
 export type QueryKind = "read" | "write" | "other";
 
@@ -178,23 +179,33 @@ function readLastLines(path: string, maxLines: number): string[] {
     if (size === 0) return [];
     const chunkSize = 64 * 1024;
     let position = size;
-    let carry = "";
+    let carry = Buffer.alloc(0);
     const lines: string[] = [];
     while (position > 0 && lines.length < maxLines) {
       const readSize = Math.min(chunkSize, position);
       position -= readSize;
       const buf = Buffer.alloc(readSize);
       readSync(fd, buf, 0, readSize, position);
-      const text = buf.toString("utf8") + carry;
-      const parts = text.split("\n");
-      carry = parts[0] ?? "";
-      for (let i = parts.length - 1; i >= 1; i--) {
-        const line = parts[i]!;
-        if (line.trim()) lines.unshift(line);
+      const combined = Buffer.concat([buf, carry]);
+      let lineStart = 0;
+      const lineBufs: Buffer[] = [];
+      for (let i = 0; i < combined.length; i++) {
+        if (combined[i] === 0x0a) {
+          lineBufs.push(combined.subarray(lineStart, i));
+          lineStart = i + 1;
+        }
+      }
+      carry = combined.subarray(lineStart);
+      for (let i = lineBufs.length - 1; i >= 0; i--) {
+        const line = lineBufs[i]!.toString("utf8").trim();
+        if (line) lines.unshift(line);
         if (lines.length >= maxLines) break;
       }
     }
-    if (carry.trim() && lines.length < maxLines) lines.unshift(carry);
+    if (carry.length > 0 && lines.length < maxLines) {
+      const line = carry.toString("utf8").trim();
+      if (line) lines.unshift(line);
+    }
     return lines.slice(-maxLines);
   } finally {
     closeSync(fd);
@@ -240,10 +251,12 @@ function readLogSince(
       let position = 0;
       let carry = "";
       const buf = Buffer.alloc(bufSize);
+      const decoder = new StringDecoder("utf8");
       while (position < size) {
         const n = readSync(fd, buf, 0, Math.min(bufSize, size - position), position);
         position += n;
-        const chunk = carry + buf.toString("utf8", 0, n);
+        const chunk = carry + decoder.write(buf.subarray(0, n));
+        carry = "";
         const parts = chunk.split("\n");
         carry = parts.pop() ?? "";
         for (const line of parts) {
@@ -257,8 +270,10 @@ function readLogSince(
             continue;
           }
           after.push(entry);
+          if (after.length >= limit) return { found: true, sinceAt, after };
         }
       }
+      carry += decoder.end();
       if (carry.trim()) {
         const entry = parseLogLine(carry);
         if (entry) {
@@ -267,6 +282,7 @@ function readLogSince(
             sinceAt = entry.at;
           } else if (matched) {
             after.push(entry);
+            if (after.length >= limit) return { found: true, sinceAt, after };
           }
         }
       }
@@ -451,9 +467,10 @@ export class QueryLog {
     this.flush();
     try {
       compactLogFileIfNeeded(this.logFile, this.diskRetention);
-      this.appendsSinceCompact = 0;
     } catch {
       /* compaction must not break queries */
+    } finally {
+      this.appendsSinceCompact = 0;
     }
   }
 
