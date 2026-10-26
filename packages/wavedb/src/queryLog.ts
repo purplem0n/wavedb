@@ -2,15 +2,20 @@
 
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 
 export type QueryKind = "read" | "write" | "other";
 
@@ -33,12 +38,21 @@ export interface QueryMetrics {
 
 export interface QueryLogOptions {
   dataPath?: string;
-  /** Max entries retained in memory (default 10_000; hard cap 10_000). On-disk tail may briefly exceed this between compactions. */
+  /**
+   * With `dataPath`: in-process ring buffer for live tail / `since` polling (default 512).
+   * Without `dataPath`: max entries kept entirely in RAM (default 10_000).
+   */
   memoryLimit?: number;
 }
 
-const DEFAULT_MEMORY = 10_000;
-const MAX_MEMORY = 10_000;
+/** Hot ring when persisting to disk (Studio poll + unflushed tail). */
+const DEFAULT_HOT_BUFFER = 512;
+const MAX_HOT_BUFFER = 2_000;
+/** Ephemeral in-memory-only log (no data path). */
+const DEFAULT_EPHEMERAL_MEMORY = 10_000;
+const MAX_EPHEMERAL_MEMORY = 10_000;
+/** Max JSONL lines retained on disk. */
+const DEFAULT_DISK_RETENTION = 10_000;
 /** Append batch size before syncing JSONL to disk. */
 const LOG_FLUSH_BATCH = 256;
 /** Debounced metrics + log flush interval (ms). */
@@ -136,8 +150,153 @@ function isQueryLogEntry(raw: unknown): raw is QueryLogEntry {
   );
 }
 
-/** Load persisted JSONL (and legacy `.1` rotation) newest-last, capped at `limit`. */
-function loadPersistedEntries(logFile: string, limit: number): QueryLogEntry[] {
+function parseLogLine(line: string): QueryLogEntry | undefined {
+  const trimmed = line.trim();
+  if (!trimmed) return undefined;
+  try {
+    const e = JSON.parse(trimmed) as unknown;
+    return isQueryLogEntry(e) ? e : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseLogText(text: string): QueryLogEntry[] {
+  const parsed: QueryLogEntry[] = [];
+  for (const line of text.split("\n")) {
+    const e = parseLogLine(line);
+    if (e) parsed.push(e);
+  }
+  return parsed;
+}
+
+/** Read up to `maxLines` accepted complete lines from the end of a file (no full-file string). */
+function readLastLines(
+  path: string,
+  maxLines: number,
+  accept: (line: string) => boolean = () => true,
+): string[] {
+  if (maxLines <= 0) return [];
+  const fd = openSync(path, "r");
+  try {
+    const { size } = statSync(path);
+    if (size === 0) return [];
+    const chunkSize = 64 * 1024;
+    let position = size;
+    let buffer = Buffer.alloc(0);
+    const lines: string[] = [];
+    const pushLine = (raw: Buffer) => {
+      const line = raw.toString("utf8").trim();
+      if (line && accept(line)) lines.unshift(line);
+    };
+    while (position > 0 && lines.length < maxLines) {
+      const readSize = Math.min(chunkSize, position);
+      position -= readSize;
+      const chunk = Buffer.alloc(readSize);
+      readSync(fd, chunk, 0, readSize, position);
+      buffer = Buffer.concat([chunk, buffer]);
+      while (lines.length < maxLines) {
+        const lastNl = buffer.lastIndexOf(0x0a);
+        if (lastNl < 0) break;
+        const lineBuf = buffer.subarray(lastNl + 1);
+        buffer = buffer.subarray(0, lastNl);
+        pushLine(lineBuf);
+      }
+    }
+    if (buffer.length > 0 && lines.length < maxLines) {
+      pushLine(buffer);
+    }
+    return lines.slice(-maxLines);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function logFilePaths(logFile: string): string[] {
+  return [`${logFile}.1`, logFile].filter((p) => existsSync(p));
+}
+
+/** Newest-last tail of persisted JSONL without loading the full file. */
+function readLogTail(logFile: string, limit: number): QueryLogEntry[] {
+  const paths = logFilePaths(logFile);
+  if (paths.length === 0 || limit <= 0) return [];
+  const entries: QueryLogEntry[] = [];
+  for (const path of paths) {
+    for (const line of readLastLines(path, limit, (line) => parseLogLine(line) !== undefined)) {
+      const e = parseLogLine(line);
+      if (e) entries.push(e);
+    }
+  }
+  entries.sort((a, b) => a.at - b.at);
+  return entries.slice(-limit);
+}
+
+/** Scan JSONL in file order for `sinceId`; collect up to `limit` entries after it (chunked reads). */
+function readLogSince(
+  logFile: string,
+  sinceId: string,
+  limit: number,
+): { found: false } | { found: true; sinceAt: number; after: QueryLogEntry[] } {
+  const paths = logFilePaths(logFile);
+  if (paths.length === 0) return { found: false };
+  let matched = false;
+  let sinceAt = 0;
+  const after: QueryLogEntry[] = [];
+  const bufSize = 256 * 1024;
+
+  for (const path of paths) {
+    const fd = openSync(path, "r");
+    try {
+      const { size } = statSync(path);
+      let position = 0;
+      let carry = "";
+      const buf = Buffer.alloc(bufSize);
+      const decoder = new StringDecoder("utf8");
+      while (position < size) {
+        const n = readSync(fd, buf, 0, Math.min(bufSize, size - position), position);
+        position += n;
+        const chunk = carry + decoder.write(buf.subarray(0, n));
+        carry = "";
+        const parts = chunk.split("\n");
+        carry = parts.pop() ?? "";
+        for (const line of parts) {
+          const entry = parseLogLine(line);
+          if (!entry) continue;
+          if (!matched) {
+            if (entry.id === sinceId) {
+              matched = true;
+              sinceAt = entry.at;
+            }
+            continue;
+          }
+          after.push(entry);
+          if (after.length >= limit) return { found: true, sinceAt, after };
+        }
+      }
+      carry += decoder.end();
+      if (carry.trim()) {
+        const entry = parseLogLine(carry);
+        if (entry) {
+          if (!matched && entry.id === sinceId) {
+            matched = true;
+            sinceAt = entry.at;
+          } else if (matched) {
+            after.push(entry);
+            if (after.length >= limit) return { found: true, sinceAt, after };
+          }
+        }
+      }
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  if (!matched) return { found: false };
+  return { found: true, sinceAt, after: after.slice(0, limit) };
+}
+
+/** Read persisted JSONL (and legacy `.1` rotation), sorted oldest-first. */
+function readAllLogEntries(logFile: string): QueryLogEntry[] {
   const paths = [`${logFile}.1`, logFile].filter((p) => existsSync(p));
   if (paths.length === 0) return [];
   const parsed: QueryLogEntry[] = [];
@@ -148,26 +307,10 @@ function loadPersistedEntries(logFile: string, limit: number): QueryLogEntry[] {
     } catch {
       continue;
     }
-    for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const e = JSON.parse(trimmed) as unknown;
-        if (isQueryLogEntry(e)) parsed.push(e);
-      } catch {
-        /* skip corrupt line */
-      }
-    }
+    parsed.push(...parseLogText(text));
   }
   parsed.sort((a, b) => a.at - b.at);
-  if (parsed.length <= limit) return parsed;
-  const out = parsed.slice(-limit);
-  try {
-    writeLogAtomic(logFile, out);
-  } catch {
-    /* keep in-memory tail even if compact fails */
-  }
-  return out;
+  return parsed;
 }
 
 function writeLogAtomic(logFile: string, entries: QueryLogEntry[]): void {
@@ -186,15 +329,32 @@ function writeLogAtomic(logFile: string, entries: QueryLogEntry[]): void {
   }
 }
 
+/** Trim on-disk JSONL to the newest `retention` entries (read on `/api/query-log`, not at process start). */
+function compactLogFileIfNeeded(logFile: string, retention: number): void {
+  const all = readAllLogEntries(logFile);
+  if (all.length <= retention) return;
+  writeLogAtomic(logFile, all.slice(-retention));
+}
+
 function truncateSql(sql: string, max = 2000): string {
   const s = sql.replace(/\s+/g, " ").trim();
   return s.length <= max ? s : `${s.slice(0, max)}…`;
 }
 
+function mergeEntries(a: QueryLogEntry[], b: QueryLogEntry[]): QueryLogEntry[] {
+  const byId = new Map<string, QueryLogEntry>();
+  for (const e of a) byId.set(e.id, e);
+  for (const e of b) byId.set(e.id, e);
+  return [...byId.values()].sort((x, y) => x.at - y.at);
+}
+
 export class QueryLog {
-  private entries: QueryLogEntry[] = [];
+  /** Hot ring (persisted logs also append to JSONL). */
+  private hot: QueryLogEntry[] = [];
   private metrics: QueryMetrics;
-  private readonly memoryLimit: number;
+  /** Max hot entries when `logFile` is set; else max in-memory entries. */
+  private readonly hotLimit: number;
+  private readonly diskRetention: number;
   private readonly metricsFile?: string;
   private readonly logFile?: string;
   private listeners = new Set<(entry: QueryLogEntry) => void>();
@@ -205,17 +365,21 @@ export class QueryLog {
   private readonly compactEvery: number;
 
   constructor(opts: QueryLogOptions = {}) {
-    const requested = opts.memoryLimit ?? DEFAULT_MEMORY;
-    this.memoryLimit = Math.max(1, Math.min(requested, MAX_MEMORY));
-    this.compactEvery = Math.max(1, Math.ceil(this.memoryLimit / 10));
     if (opts.dataPath) {
+      const requested = opts.memoryLimit ?? DEFAULT_HOT_BUFFER;
+      this.hotLimit = Math.max(1, Math.min(requested, MAX_HOT_BUFFER));
+      this.diskRetention = DEFAULT_DISK_RETENTION;
+      this.compactEvery = Math.max(1, Math.ceil(this.diskRetention / 10));
       const dir = waveDir(opts.dataPath);
       mkdirSync(dir, { recursive: true });
       this.metricsFile = metricsPath(opts.dataPath);
       this.logFile = logPath(opts.dataPath);
       this.metrics = readMetrics(this.metricsFile);
-      this.entries = loadPersistedEntries(this.logFile, this.memoryLimit);
     } else {
+      const requested = opts.memoryLimit ?? DEFAULT_EPHEMERAL_MEMORY;
+      this.hotLimit = Math.max(1, Math.min(requested, MAX_EPHEMERAL_MEMORY));
+      this.diskRetention = DEFAULT_DISK_RETENTION;
+      this.compactEvery = Math.max(1, Math.ceil(this.hotLimit / 10));
       this.metrics = { totalReads: 0, totalWrites: 0, totalOther: 0 };
     }
   }
@@ -225,14 +389,30 @@ export class QueryLog {
   }
 
   recent(limit = 100, sinceId?: string): QueryLogEntry[] {
-    const cap = Math.max(1, Math.min(limit, this.memoryLimit));
+    const cap = Math.max(1, Math.min(limit, this.logFile ? DEFAULT_DISK_RETENTION : this.hotLimit));
+
+    if (!this.logFile) {
+      if (sinceId) {
+        const idx = this.hot.findIndex((e) => e.id === sinceId);
+        if (idx >= 0) return this.hot.slice(idx + 1, idx + 1 + cap);
+      }
+      return this.hot.slice(-cap);
+    }
+
     if (sinceId) {
-      const idx = this.entries.findIndex((e) => e.id === sinceId);
-      if (idx >= 0) {
-        return this.entries.slice(idx + 1, idx + 1 + cap);
+      const hotIdx = this.hot.findIndex((e) => e.id === sinceId);
+      if (hotIdx >= 0) return this.hot.slice(hotIdx + 1, hotIdx + 1 + cap);
+
+      this.flush();
+      const diskSince = readLogSince(this.logFile, sinceId, cap);
+      if (diskSince.found) {
+        const newerHot = this.hot.filter((e) => e.at > diskSince.sinceAt);
+        return mergeEntries(diskSince.after, newerHot).slice(0, cap);
       }
     }
-    return this.entries.slice(-cap);
+
+    const diskTail = existsSync(this.logFile) ? readLogTail(this.logFile, cap) : [];
+    return mergeEntries(diskTail, this.hot).slice(-cap);
   }
 
   subscribe(fn: (entry: QueryLogEntry) => void): () => void {
@@ -273,6 +453,27 @@ export class QueryLog {
     (this.flushTimer as any).unref?.();
   }
 
+  private pushHot(entry: QueryLogEntry): void {
+    this.hot.push(entry);
+    if (this.hot.length > this.hotLimit) {
+      this.hot.splice(0, this.hot.length - this.hotLimit);
+    }
+  }
+
+  private maybeCompactDisk(): void {
+    if (!this.logFile) return;
+    this.appendsSinceCompact += 1;
+    if (this.appendsSinceCompact < this.compactEvery) return;
+    this.flush();
+    try {
+      compactLogFileIfNeeded(this.logFile, this.diskRetention);
+    } catch {
+      /* compaction must not break queries */
+    } finally {
+      this.appendsSinceCompact = 0;
+    }
+  }
+
   record(input: {
     sql: string;
     kind?: QueryKind;
@@ -297,12 +498,7 @@ export class QueryLog {
     else if (kind === "write") this.metrics.totalWrites += 1;
     else this.metrics.totalOther += 1;
 
-    this.entries.push(entry);
-    let trimmed = false;
-    if (this.entries.length > this.memoryLimit) {
-      this.entries.splice(0, this.entries.length - this.memoryLimit);
-      trimmed = true;
-    }
+    this.pushHot(entry);
 
     if (this.metricsFile) this.metricsDirty = true;
 
@@ -314,15 +510,7 @@ export class QueryLog {
         } else {
           this.scheduleFlush();
         }
-        if (trimmed) {
-          this.appendsSinceCompact += 1;
-          if (this.appendsSinceCompact >= this.compactEvery) {
-            this.flush();
-            writeLogAtomic(this.logFile, this.entries);
-            this.pendingLogLines = [];
-            this.appendsSinceCompact = 0;
-          }
-        }
+        this.maybeCompactDisk();
       } catch {
         /* logging must not break queries */
       }
