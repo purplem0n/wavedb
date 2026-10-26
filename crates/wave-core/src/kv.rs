@@ -98,7 +98,7 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             durability: Durability::Sync,
-            cache_bytes: 64 * 1024 * 1024,
+            cache_bytes: 16 * 1024 * 1024,
             temporary: false,
         }
     }

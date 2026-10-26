@@ -14,6 +14,17 @@ describe("waveHost", () => {
     await host.close();
     await db.close();
   });
+
+  test("studio: false serves API only", async () => {
+    const { db, dir } = await openTmp({});
+    const host = waveHost(db, { dataPath: join(dir, "data.wave"), auth: false, studio: false });
+    const health = await host.handler.fetch(new Request("http://x/__wave/api/health"));
+    expect(health.status).toBe(200);
+    const studio = await host.handler.fetch(new Request("http://x/wavedb-studio/"));
+    expect(studio.status).toBe(404);
+    await host.close();
+    await db.close();
+  });
 });
 
 describe("resolveStudioDist", () => {
