@@ -394,7 +394,10 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       txs.delete(id);
       if (m[2] === "commit") {
         const lostCommit = rejectIfLeaderFenceLost();
-        if (lostCommit) return lostCommit;
+        if (lostCommit) {
+          await Promise.resolve(e.tx.rollback()).catch(() => {});
+          return lostCommit;
+        }
         return jsonResponse(200, await e.tx.commit());
       }
       await e.tx.rollback();
