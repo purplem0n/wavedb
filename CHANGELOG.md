@@ -8,4 +8,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Leader lease: same-host reclaim when `pid` is missing (legacy/OOM), and embed/`wave serve` retries acquire for up to ~20s (`WAVE_LEADER_WAIT_MS`) before error or standby — avoids Fly restart crash loops after hard kills.
+- Leader lease: same-host reclaim when `pid` is missing (legacy/OOM); embed/`wave serve` goes standby when renewal fails so two handlers cannot both accept writes after lease loss.

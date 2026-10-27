@@ -149,9 +149,16 @@ export function releaseLeaderLease(opts: LeaderOptions, holder: string): void {
   }
 }
 
-export function startLeaderRenewal(opts: LeaderOptions, holder: string): () => void {
+export function startLeaderRenewal(
+  opts: LeaderOptions,
+  holder: string,
+  onLost?: () => void,
+): () => void {
   const iv = setInterval(() => {
-    if (!renewLeaderLease(opts, holder)) clearInterval(iv);
+    if (!renewLeaderLease(opts, holder)) {
+      clearInterval(iv);
+      onLost?.();
+    }
   }, Math.max(1000, (opts.ttlMs ?? 15_000) / 3));
   (iv as any).unref?.();
   return () => {

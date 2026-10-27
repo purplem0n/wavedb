@@ -14,20 +14,6 @@ import { QueryLog } from "./queryLog.ts";
 import { initWaveAuth, normalizePrefix, type WaveAuth } from "./auth.ts";
 import { wavedbPackageVersion } from "./pkgVersion.ts";
 
-/** Blocking sleep for leader acquire retry (startup only; Bun + Node). */
-function sleepMsSync(ms: number): void {
-  if (ms <= 0) return;
-  const bun = (globalThis as typeof globalThis & { Bun?: { sleepSync?: (n: number) => void } }).Bun;
-  if (typeof bun?.sleepSync === "function") {
-    bun.sleepSync(ms);
-    return;
-  }
-  const end = Date.now() + ms;
-  while (Date.now() < end) {
-    /* rare startup path */
-  }
-}
-
 export interface HandlerOptions {
   /** Path to database directory (leader lease + superuser auth). */
   dataPath?: string;
@@ -35,8 +21,6 @@ export interface HandlerOptions {
   leader?: boolean;
   /** If leader acquisition fails, start HTTP in standby mode (503 on /api/run). */
   standby?: boolean;
-  /** When `leader` is set, retry acquire for this long before fail/standby (default 20s; env `WAVE_LEADER_WAIT_MS`). */
-  leaderAcquireWaitMs?: number;
   /** Static bearer for M2M clients (`Authorization: Bearer`). */
   token?: string;
   /** Enable superuser auth (default: true when `dataPath` is set, else false). */
@@ -257,24 +241,15 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
   let active = true;
 
   if (opts.leader && resolvedDataPath) {
-    const waitMs = Math.max(
-      0,
-      opts.leaderAcquireWaitMs ??
-        Number(process.env.WAVE_LEADER_WAIT_MS ?? 20_000),
-    );
-    const leaseOpts = { dataPath: resolvedDataPath };
-    const deadline = Date.now() + waitMs;
-    let got = acquireLeaderLease(leaseOpts);
-    while (!got.ok && Date.now() < deadline) {
-      sleepMsSync(Math.min(250, deadline - Date.now()));
-      got = acquireLeaderLease(leaseOpts);
-    }
+    const got = acquireLeaderLease({ dataPath: resolvedDataPath });
     if (!got.ok) {
       if (!opts.standby) throw new WaveError(got.reason ?? "not leader", "WAVE_INVALID");
       active = false;
     } else if (got.lease) {
       leader = got.lease;
-      stopLeader = startLeaderRenewal({ dataPath: resolvedDataPath }, leader.holder);
+      stopLeader = startLeaderRenewal({ dataPath: resolvedDataPath }, leader.holder, () => {
+        active = false;
+      });
     }
   }
 
