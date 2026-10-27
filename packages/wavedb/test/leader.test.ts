@@ -22,7 +22,7 @@ describe("leader lease", () => {
     }
   });
 
-  test("does not reclaim legacy lease without pid until expiry", () => {
+  test("reclaims legacy lease without pid on same host", () => {
     const dir = mkdtempSync(join(tmpdir(), "wave-leader-"));
     try {
       const path = join(dir, ".wave", "leader.json");
@@ -34,6 +34,32 @@ describe("leader lease", () => {
           {
             holder: "legacy-holder",
             host,
+            expiresAt: Date.now() + 60_000,
+            generation: 1,
+          },
+          null,
+          2,
+        ),
+      );
+      const b = acquireLeaderLease({ dataPath: dir, ttlMs: 60_000 });
+      expect(b.ok).toBe(true);
+      expect(b.lease?.holder).not.toBe("legacy-holder");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not reclaim legacy lease without pid on another host until expiry", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wave-leader-"));
+    try {
+      const path = join(dir, ".wave", "leader.json");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(
+        path,
+        JSON.stringify(
+          {
+            holder: "legacy-holder",
+            host: "other-fly-machine",
             expiresAt: Date.now() + 60_000,
             generation: 1,
           },

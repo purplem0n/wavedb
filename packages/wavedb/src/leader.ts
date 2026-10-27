@@ -49,7 +49,8 @@ function isProcessAlive(pid: number): boolean {
 /** True when an unexpired lease is from a prior process on this host (e.g. SIGINT without release). */
 export function canReclaimStaleLeaderLease(cur: LeaderLease, host: string): boolean {
   if (cur.host !== host) return false;
-  if (cur.pid === undefined || !Number.isInteger(cur.pid) || cur.pid <= 0) return false;
+  // Legacy leases or hard kills (OOM) may omit pid; only the same host id may replace them.
+  if (cur.pid === undefined || !Number.isInteger(cur.pid) || cur.pid <= 0) return true;
   if (!isProcessAlive(cur.pid)) return true;
   return cur.pid === process.pid && cur.instanceId !== processInstanceId;
 }
