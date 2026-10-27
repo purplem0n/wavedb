@@ -1,6 +1,6 @@
 {
   "name": "@purplemon/wavedb",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "description": "WaveDB — concurrent-write embedded relational database with a TypeScript-first API (Node + Bun)",
   "type": "module",
   "license": "MIT",
