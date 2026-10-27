@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { acquireLeaderLease, leaderHostId, renewLeaderLease, releaseLeaderLease } from "../src/leader.ts";
+import {
+  acquireLeaderLease,
+  leaderHostId,
+  renewLeaderLease,
+  releaseLeaderLease,
+  verifyLeaderFence,
+} from "../src/leader.ts";
 import { createWaveHandler } from "../src/server.ts";
 import { openTmp } from "./helpers.ts";
 
@@ -22,7 +28,7 @@ describe("leader lease", () => {
     }
   });
 
-  test("does not reclaim legacy lease without pid until expiry", () => {
+  test("reclaims legacy lease without pid on same host", () => {
     const dir = mkdtempSync(join(tmpdir(), "wave-leader-"));
     try {
       const path = join(dir, ".wave", "leader.json");
@@ -34,6 +40,32 @@ describe("leader lease", () => {
           {
             holder: "legacy-holder",
             host,
+            expiresAt: Date.now() + 60_000,
+            generation: 1,
+          },
+          null,
+          2,
+        ),
+      );
+      const b = acquireLeaderLease({ dataPath: dir, ttlMs: 60_000 });
+      expect(b.ok).toBe(true);
+      expect(b.lease?.holder).not.toBe("legacy-holder");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not reclaim legacy lease without pid on another host until expiry", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wave-leader-"));
+    try {
+      const path = join(dir, ".wave", "leader.json");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(
+        path,
+        JSON.stringify(
+          {
+            holder: "legacy-holder",
+            host: "other-fly-machine",
             expiresAt: Date.now() + 60_000,
             generation: 1,
           },
@@ -92,6 +124,19 @@ describe("leader lease", () => {
       expect(b.ok).toBe(true);
       expect(b.lease?.holder).not.toBe(stale.holder);
       expect(b.lease?.pid).toBe(process.pid);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("verifyLeaderFence matches holder and generation", () => {
+    const dir = mkdtempSync(join(tmpdir(), "wave-leader-"));
+    try {
+      const a = acquireLeaderLease({ dataPath: dir, ttlMs: 5000 });
+      expect(a.ok).toBe(true);
+      expect(verifyLeaderFence(dir, a.lease)).toBe(true);
+      releaseLeaderLease({ dataPath: dir }, a.lease!.holder);
+      expect(verifyLeaderFence(dir, a.lease)).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

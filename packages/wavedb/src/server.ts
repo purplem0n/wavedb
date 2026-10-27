@@ -9,7 +9,7 @@ import { WaveError, mapNativeError } from "./errors.ts";
 import type { Database, TxBackend } from "./db.ts";
 import { defaultWavePath } from "./db.ts";
 import type { TLSSocket } from "node:tls";
-import { acquireLeaderLease, startLeaderRenewal, type LeaderLease } from "./leader.ts";
+import { acquireLeaderLease, startLeaderRenewal, verifyLeaderFence, type LeaderLease } from "./leader.ts";
 import { QueryLog } from "./queryLog.ts";
 import { initWaveAuth, normalizePrefix, type WaveAuth } from "./auth.ts";
 import { wavedbPackageVersion } from "./pkgVersion.ts";
@@ -247,7 +247,9 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       active = false;
     } else if (got.lease) {
       leader = got.lease;
-      stopLeader = startLeaderRenewal({ dataPath: resolvedDataPath }, leader.holder);
+      stopLeader = startLeaderRenewal({ dataPath: resolvedDataPath }, leader.holder, () => {
+        active = false;
+      });
     }
   }
 
@@ -291,6 +293,13 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
     path === "/api/auth/setup" ||
     path === "/api/auth/login" ||
     path === "/api/auth/logout";
+
+  function rejectIfLeaderFenceLost(): Response | null {
+    if (!opts.leader || !resolvedDataPath || !leader) return null;
+    if (verifyLeaderFence(resolvedDataPath, leader)) return null;
+    active = false;
+    return jsonResponse(503, { error: { code: "WAVE_INVALID", message: "standby: not leader" } });
+  }
 
   async function handleApi(method: string, path: string, body: any, reqLike: IncomingMessage | Request): Promise<Response> {
     const secure = isHttps(reqLike as Request, waveAuth);
@@ -357,6 +366,8 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
     if (method !== "POST") return jsonResponse(404, { error: { code: "WAVE_NOT_FOUND", message: "no such endpoint" } });
 
     if (path === "/api/run") {
+      const lost = rejectIfLeaderFenceLost();
+      if (lost) return lost;
       const target = body.tx ? touch(String(body.tx)).tx.exec : db.backend.exec;
       const sql = body.sql !== undefined ? String(body.sql) : undefined;
       const r =
@@ -364,6 +375,8 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       return jsonResponse(200, r);
     }
     if (path === "/api/tx/begin") {
+      const lostBegin = rejectIfLeaderFenceLost();
+      if (lostBegin) return lostBegin;
       if (txs.size >= MAX_OPEN_TX) {
         return jsonResponse(503, { error: { code: "WAVE_INVALID", message: "too many open transactions" } });
       }
@@ -379,12 +392,25 @@ export function createWaveHandler(db: Database<any>, opts: HandlerOptions = {}):
       const e = touch(id);
       clearTimeout(e.timer);
       txs.delete(id);
-      if (m[2] === "commit") return jsonResponse(200, await e.tx.commit());
+      if (m[2] === "commit") {
+        const lostCommit = rejectIfLeaderFenceLost();
+        if (lostCommit) {
+          await Promise.resolve(e.tx.rollback()).catch(() => {});
+          return lostCommit;
+        }
+        return jsonResponse(200, await e.tx.commit());
+      }
       await e.tx.rollback();
       return jsonResponse(200, { ok: true });
     }
-    if (path === "/api/vacuum") return jsonResponse(200, { removed: await db.vacuum() });
+    if (path === "/api/vacuum") {
+      const lostVac = rejectIfLeaderFenceLost();
+      if (lostVac) return lostVac;
+      return jsonResponse(200, { removed: await db.vacuum() });
+    }
     if (path === "/api/compact") {
+      const lostCompact = rejectIfLeaderFenceLost();
+      if (lostCompact) return lostCompact;
       await db.compact();
       return jsonResponse(200, { ok: true });
     }

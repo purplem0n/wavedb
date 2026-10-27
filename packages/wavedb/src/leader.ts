@@ -49,7 +49,8 @@ function isProcessAlive(pid: number): boolean {
 /** True when an unexpired lease is from a prior process on this host (e.g. SIGINT without release). */
 export function canReclaimStaleLeaderLease(cur: LeaderLease, host: string): boolean {
   if (cur.host !== host) return false;
-  if (cur.pid === undefined || !Number.isInteger(cur.pid) || cur.pid <= 0) return false;
+  // Legacy leases or hard kills (OOM) may omit pid; only the same host id may replace them.
+  if (cur.pid === undefined || !Number.isInteger(cur.pid) || cur.pid <= 0) return true;
   if (!isProcessAlive(cur.pid)) return true;
   return cur.pid === process.pid && cur.instanceId !== processInstanceId;
 }
@@ -127,6 +128,14 @@ export function acquireLeaderLease(opts: LeaderOptions): { ok: boolean; lease?: 
   return { ok: false, reason: "could not acquire leader lease (contention)" };
 }
 
+/** True when on-disk lease still matches the handler's acquired lease (fencing). */
+export function verifyLeaderFence(dataPath: string, lease: LeaderLease | undefined): boolean {
+  if (!lease) return true;
+  const cur = readLease(leasePath(dataPath));
+  if (!cur) return false;
+  return cur.holder === lease.holder && cur.generation === lease.generation;
+}
+
 export function renewLeaderLease(opts: LeaderOptions, holder: string): boolean {
   const path = leasePath(opts.dataPath);
   const cur = readLease(path);
@@ -148,9 +157,21 @@ export function releaseLeaderLease(opts: LeaderOptions, holder: string): void {
   }
 }
 
-export function startLeaderRenewal(opts: LeaderOptions, holder: string): () => void {
+export function startLeaderRenewal(
+  opts: LeaderOptions,
+  holder: string,
+  onLost?: () => void,
+): () => void {
   const iv = setInterval(() => {
-    if (!renewLeaderLease(opts, holder)) clearInterval(iv);
+    try {
+      if (!renewLeaderLease(opts, holder)) {
+        clearInterval(iv);
+        onLost?.();
+      }
+    } catch {
+      clearInterval(iv);
+      onLost?.();
+    }
   }, Math.max(1000, (opts.ttlMs ?? 15_000) / 3));
   (iv as any).unref?.();
   return () => {
