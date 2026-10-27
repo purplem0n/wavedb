@@ -128,6 +128,14 @@ export function acquireLeaderLease(opts: LeaderOptions): { ok: boolean; lease?: 
   return { ok: false, reason: "could not acquire leader lease (contention)" };
 }
 
+/** True when on-disk lease still matches the handler's acquired lease (fencing). */
+export function verifyLeaderFence(dataPath: string, lease: LeaderLease | undefined): boolean {
+  if (!lease) return true;
+  const cur = readLease(leasePath(dataPath));
+  if (!cur) return false;
+  return cur.holder === lease.holder && cur.generation === lease.generation;
+}
+
 export function renewLeaderLease(opts: LeaderOptions, holder: string): boolean {
   const path = leasePath(opts.dataPath);
   const cur = readLease(path);
@@ -155,7 +163,12 @@ export function startLeaderRenewal(
   onLost?: () => void,
 ): () => void {
   const iv = setInterval(() => {
-    if (!renewLeaderLease(opts, holder)) {
+    try {
+      if (!renewLeaderLease(opts, holder)) {
+        clearInterval(iv);
+        onLost?.();
+      }
+    } catch {
       clearInterval(iv);
       onLost?.();
     }
